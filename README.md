@@ -400,26 +400,6 @@ zero -p --output-format json "reply with OK"
 
 **The bot does not reply** — check `runtime/bridge.log`. A healthy instance logs `bridge started`, `bot commands synced`, and `polling OK`.
 
-## Versioning
-
-This project follows [Semantic Versioning](https://semver.org/). Every release is tagged `vMAJOR.MINOR.PATCH`, documented in [CHANGELOG.md](CHANGELOG.md), and shipped with a source ZIP asset on the [Releases](https://github.com/SMMURDA/zero-telegram-bridge/releases) page.
-
-The running version is visible in `/status`, `/version`, `/config`, and the startup log/message.
-
-### Releasing
-
-1. Update `version` in `package.json` and add a section to `CHANGELOG.md`.
-2. Commit, then tag:
-   ```bash
-   git tag -a vX.Y.Z -m "vX.Y.Z — short description"
-   ```
-3. Push the commit and tag:
-   ```bash
-   git push origin main --tags
-   ```
-
-The `Release` GitHub Actions workflow builds `zero-telegram-bridge-vX.Y.Z.zip` from the tagged commit and creates the GitHub release with generated notes.
-
 ## License
 
 MIT. See [LICENSE](LICENSE).
