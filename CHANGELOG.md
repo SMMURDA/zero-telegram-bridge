@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.5] - 2026-10-24
+
+### Added
+
+- Session discovery now scans every project under `~/.zero/projects`, so
+  sessions created in a terminal appear in `/sessions` and `/resume` alongside
+  Telegram sessions.
+- Session buttons show the project path and the bridge switches to that
+  session's cwd when resuming.
+- `findSessionById` for exact lookups without the recent-sessions limit.
+- Session discovery unit tests.
+
+### Fixed
+
+- The Telegram picker only showed the bot's own working directory, hiding all
+  terminal sessions. This was because the bridge read a single project
+  directory and never switched cwd before `zero -p -r`.
+
 ## [0.4.4] - 2026-10-24
 
 ### Fixed
@@ -134,7 +152,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...v0.4.2

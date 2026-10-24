@@ -25,6 +25,7 @@ const path = require('path');
 const https = require('https');
 const { spawn, execFile } = require('child_process');
 const { toTelegramHtml, splitMarkdown } = require('./markdown');
+const { discoverSessions, findSessionById } = require('./sessions');
 
 const ROOT = path.resolve(__dirname, '..');
 const VERSION = (() => {
@@ -993,70 +994,24 @@ function fmtCost(n) {
   return '$' + (Number(n) || 0).toFixed(6);
 }
 
-function projectDir(cwd) {
-  return path.join(HOME, '.zero', 'projects', cwd.replace(/[\/\\:]/g, '-'));
-}
-
-function readFirstPrompt(file) {
-  try {
-    const fd = fs.openSync(file, 'r');
-    const buf = Buffer.alloc(65536);
-    const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    for (const line of buf.toString('utf8', 0, n).split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.type === 'user' && parsed.message) {
-          const content = parsed.message.content;
-          if (typeof content === 'string') return content;
-          if (Array.isArray(content)) {
-            const text = content.find(x => x && x.type === 'text' && x.text);
-            if (text) return text.text;
-          }
-        }
-        if (parsed.type === 'queue-operation' && parsed.operation === 'enqueue' && parsed.content) {
-          return parsed.content;
-        }
-      } catch (_) {}
-    }
-  } catch (_) {}
-  return '(untitled)';
-}
-
-function listSessions(cwd, limit = 12) {
-  const dir = projectDir(cwd);
-  let files = [];
-  try {
-    files = fs.readdirSync(dir)
-      .filter(f => f.endsWith('.jsonl'))
-      .map(f => {
-        const full = path.join(dir, f);
-        let st;
-        try { st = fs.statSync(full); } catch (_) { return null; }
-        return { file: full, id: f.replace(/\.jsonl$/, ''), mtime: st.mtimeMs };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, limit);
-  } catch (_) {}
-  return files.map((f, i) => ({
-    ...f,
-    index: i + 1,
-    title: readFirstPrompt(f.file)
-  }));
+function displayCwd(cwd) {
+  if (!cwd) return '?';
+  if (cwd === HOME) return '~';
+  if (cwd.startsWith(HOME + path.sep)) return '~/' + cwd.slice(HOME.length + 1);
+  return cwd;
 }
 
 function shortSessionLabel(x) {
   const date = new Date(x.mtime).toLocaleString('en-GB', {
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
   });
-  const title = clip(String(x.title || '').replace(/\s+/g, ' ').trim(), 28) || 'untitled';
-  return clip(`▶️ ${x.index}. ${date} · ${title}`, 60);
+  const project = clip(displayCwd(x.cwd), 20);
+  const title = clip(String(x.title || '').replace(/\s+/g, ' ').trim(), 20) || 'untitled';
+  return clip(`▶️ ${x.index}. ${date} · ${project} · ${title}`, 60);
 }
 
 function sessionsKeyboard(list) {
-  const rows = list.slice(0, 10).map(x => [{
+  const rows = list.slice(0, 12).map(x => [{
     text: shortSessionLabel(x),
     callback_data: `resume:${x.id}`
   }]);
@@ -1220,30 +1175,37 @@ async function handleCommand(chatId, text, s) {
 
     case '/resume': {
       if (!rest) {
-        const list = listSessions(s.cwd);
-        if (!list.length) return send(chatId, `No sessions in ${s.cwd} yet.`);
+        const list = discoverSessions(HOME, 12);
+        if (!list.length) return send(chatId, 'No sessions found in any project yet.');
         return send(chatId,
-          `⏪ Pick a session to resume.\nTap a button below — it activates immediately.\n\nFolder: ${s.cwd}`,
+          '⏪ Pick a session to resume.\nAcross all projects, newest first. Tap a session — it activates immediately.',
           { reply_markup: sessionsKeyboard(list) });
       }
-      let id = rest;
+
+      const all = discoverSessions(HOME, 50);
+      let meta;
       if (/^\d+$/.test(rest)) {
-        const list = listSessions(s.cwd);
-        const item = list[Number(rest) - 1];
-        if (!item) return send(chatId, `Session number ${rest} not found. Use /resume to list.`);
-        id = item.id;
+        meta = all[Number(rest) - 1];
+      } else {
+        meta = findSessionById(HOME, rest) ||
+          all.find(x => x.id.startsWith(rest));
       }
-      s.resumeId = id;
+      if (!meta) {
+        return send(chatId, 'Session not found across projects. Use /resume to list.');
+      }
+
+      s.resumeId = meta.id;
       s.newSession = false;
+      s.cwd = meta.cwd;
       saveState();
-      return send(chatId, `⏪ Next message will resume: ${id}`);
+      return send(chatId, `⏪ Next message will resume: ${meta.id}\n📁 ${meta.cwd}`);
     }
 
     case '/sessions': {
-      const list = listSessions(s.cwd);
-      if (!list.length) return send(chatId, `No sessions in ${s.cwd} yet.`);
+      const list = discoverSessions(HOME, 12);
+      if (!list.length) return send(chatId, 'No sessions found in any project yet.');
       return send(chatId,
-        `🗂️ Sessions in ${s.cwd}\nTap a button to activate a session immediately.`,
+        '🗂️ Recent sessions across all projects\nTap a button to activate a session immediately.',
         { reply_markup: sessionsKeyboard(list) });
     }
 
@@ -1570,20 +1532,22 @@ async function handleCallback(cq) {
 
     if (data.startsWith('resume:')) {
       const id = data.slice('resume:'.length);
-      const all = listSessions(s.cwd, 100);
-      const meta = all.find(x => x.id === id);
+      const meta = findSessionById(HOME, id) ||
+        discoverSessions(HOME, 100).find(x => x.id === id);
       if (!meta) {
         await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Session not found' });
         return;
       }
       s.resumeId = id;
       s.newSession = false;
+      s.cwd = meta.cwd;
       saveState();
       await api('answerCallbackQuery', { callback_query_id: cq.id, text: '⏪ Session activated' });
       await removeInline(chatId, msg.message_id);
       const title = String(meta.title || '').replace(/\s+/g, ' ').slice(0, 80);
       await send(chatId,
         `⏪ Session active: ${id.slice(0, 8)}${title ? `\n${title}` : ''}\n` +
+        `📁 ${meta.cwd}\n` +
         'The next message continues this session. Use /new to start fresh.',
         { reply_markup: MAIN_KEYBOARD });
       return;

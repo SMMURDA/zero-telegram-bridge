@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.4-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.5-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -15,6 +15,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 
 - 💬 **Two-way chat** — send a message, get the agent's reply, keep the context.
 - 🆕 **Session continuity** — `-c` between messages, `/new` to reset, `/resume` to pick an older session.
+- 🖥️ **All projects** — terminal sessions and Telegram sessions appear in the same picker; resuming switches to the session's project directory.
 - 🗜️ **Compaction** — manual `/compact [instructions]`, plus per-chat auto-compact with a confirmation UI and configurable threshold.
 - ⏹️ **ESC-like stop** — `/stop` sends `SIGINT` first, then escalates, so you can give the agent a new direction immediately.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
@@ -201,15 +202,15 @@ The bridge passes `DISABLE_AUTO_COMPACT=1` to every `zero` child, so Zero's buil
 
 ## Sessions
 
-Zero stores sessions as `~/.zero/projects/<slug>/<uuid>.jsonl`, where the slug is the working directory with separators replaced by dashes. The bridge lists the 10 most recent files for the current working directory and attaches them as inline buttons.
+Zero stores sessions as `~/.zero/projects/<slug>/<uuid>.jsonl`. The bridge scans **every** project directory, so sessions created in a terminal appear in the same picker as Telegram sessions. The 12 most recent are shown with their project path.
 
 Tapping a session:
 
 1. Sets it as the resume target (`resumeId`).
-2. Clears the buttons.
-3. Confirms the active session.
+2. Switches the bot's working directory to the cwd recorded in that session.
+3. Clears the buttons and confirms the active session.
 
-The next message runs `zero -p -r <id>`. After that, normal `-c` continuation takes over.
+The cwd switch is required: `zero -p -r <id>` only finds a session inside its own project directory. After the resumed message, normal `-c` continuation takes over in that project. Avoid using the same session from a terminal and the bot at the same time.
 
 ## Live progress
 
