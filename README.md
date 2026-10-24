@@ -1,5 +1,8 @@
 # Zero Telegram Bridge
 
+[![Version](https://img.shields.io/badge/version-0.4.1-blue)](CHANGELOG.md)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
 
 ```
@@ -159,7 +162,7 @@ Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in 
 | `/plugin [args]` | Proxy to `zero plugin` |
 | `/agents` | Proxy to `zero agents` |
 | `/doctor` | Proxy to `zero doctor` |
-| `/version` | Proxy to `zero --version` |
+| `/version` | Bridge version and Zero CLI version |
 | `/config` | Bridge config with the token redacted |
 
 Unknown slash commands are forwarded to Zero, so skills such as `/commit` keep working.
@@ -307,6 +310,12 @@ zero -p --output-format json "reply with OK"
 ```
 
 **The bot does not reply** — check `runtime/bridge.log`. A healthy instance logs `bridge started`, `bot commands synced`, and `polling OK`.
+
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/). Every release is tagged `vMAJOR.MINOR.PATCH`, documented in [CHANGELOG.md](CHANGELOG.md), and shipped with a source ZIP asset on the [Releases](https://github.com/SMMURDA/zero-telegram-bridge/releases) page.
+
+The running version is visible in `/status`, `/version`, `/config`, and the startup log/message.
 
 ## License
 

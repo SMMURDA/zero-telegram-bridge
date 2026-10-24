@@ -26,6 +26,11 @@ const https = require('https');
 const { spawn, execFile } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
+const VERSION = (() => {
+  try { return require(path.join(ROOT, 'package.json')).version || '0.0.0'; }
+  catch (_) { return '0.0.0'; }
+})();
+
 const RUNTIME_DIR = process.env.ZERO_BRIDGE_RUNTIME
   ? path.resolve(process.env.ZERO_BRIDGE_RUNTIME)
   : path.join(ROOT, 'runtime');
@@ -161,7 +166,7 @@ const BOT_COMMANDS = [
   { command: 'plugin', description: '🧩 Zero plugins' },
   { command: 'agents', description: '🤖 List agents' },
   { command: 'doctor', description: '🩺 Zero health check' },
-  { command: 'version', description: '🏷️ Zero CLI version' },
+  { command: 'version', description: '🏷️ Bridge & Zero CLI version' },
   { command: 'config', description: '🔧 Bridge configuration' }
 ];
 
@@ -215,7 +220,7 @@ const HELP = `📖 ZERO HELP
 /plugin [subcommand] — manage plugins
 /agents — list agents
 /doctor — Zero CLI health check
-/version — Zero CLI version
+/version — bridge and Zero CLI versions
 /config — bridge config (token redacted)
 
 ✨ More
@@ -1156,6 +1161,7 @@ async function handleCommand(chatId, text, s) {
         : (s.newSession ? 'new (next)' : 'continue (-c)');
       return send(chatId,
         `📊 Bridge status\n` +
+        `bridge: v${VERSION}\n` +
         `model: ${s.model}\n` +
         `effort: ${s.effort}\n` +
         `folder: ${s.cwd}\n` +
@@ -1246,11 +1252,13 @@ async function handleCommand(chatId, text, s) {
     case '/doctor':
       return send(chatId, await runCli(['doctor'], { timeout: 120000 }));
 
-    case '/version':
-      return send(chatId, await runCli(['--version']));
+    case '/version': {
+      const zeroVersion = await runCli(['--version']);
+      return send(chatId, `Bridge: v${VERSION}\nZero CLI: ${zeroVersion}`);
+    }
 
     case '/config': {
-      const safe = { ...config, token: config.token ? '<redacted>' : '' };
+      const safe = { version: VERSION, ...config, token: config.token ? '<redacted>' : '' };
       return send(chatId, '```\n' + JSON.stringify(safe, null, 2) + '\n```');
     }
 
@@ -1585,10 +1593,10 @@ process.on('unhandledRejection', e => log('unhandled rejection:', e));
 (async () => {
   try {
     const me = await api('getMe');
-    log(`bridge started as @${me.username} (pid ${process.pid})`);
+    log(`bridge v${VERSION} started as @${me.username} (pid ${process.pid})`);
     await syncCommands();
     await send([...allowedChatIds][0],
-      `🤖 Zero bridge online (@${me.username}). Send a message or /help.`);
+      `🤖 Zero bridge v${VERSION} online (@${me.username}). Send a message or /help.`);
   } catch (e) {
     log('startup check failed:', e.message);
   }
