@@ -1,0 +1,10 @@
+# Runtime state, logs, pid, and the real config (contains the bot token)
+runtime/*
+!runtime/.gitkeep
+
+# Uploads live inside the configured workdir, but ignore them if it is the repo
+uploads/
+
+node_modules/
+*.log
+.DS_Store

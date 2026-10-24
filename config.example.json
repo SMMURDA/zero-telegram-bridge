@@ -1,0 +1,10 @@
+{
+  "token": "123456789:AAExampleTokenFromBotFather",
+  "allowedChatIds": [123456789],
+  "workdir": "/absolute/path/to/zero-workspace",
+  "zeroBin": "zero",
+  "model": "flash",
+  "effort": "low",
+  "jobTimeoutMs": 1800000,
+  "maxFileBytes": 20971520
+}
