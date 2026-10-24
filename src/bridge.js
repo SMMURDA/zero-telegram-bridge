@@ -605,6 +605,8 @@ function runZero(prompt, s, onChild, control) {
         ...process.env,
         HOME,
         NO_COLOR: '1',
+        // Let the SessionStart hook skip nested jobs spawned by this bridge.
+        ZERO_BRIDGE_CHILD: '1',
         // The bridge owns auto-compaction so the Telegram toggle is authoritative.
         DISABLE_AUTO_COMPACT: '1'
       },

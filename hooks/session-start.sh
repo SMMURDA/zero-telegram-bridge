@@ -5,6 +5,11 @@ set -u
 # start.sh is idempotent, so this is safe on every launch, resume, and
 # every nested `zero -p` invocation triggered by the bridge itself.
 
+# The bridge marks jobs it spawns; they must not re-run this hook.
+if [ "${ZERO_BRIDGE_CHILD:-}" = "1" ]; then
+  exit 0
+fi
+
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 RUNTIME="$ROOT/runtime"
 PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}"
