@@ -12,6 +12,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.10.1] - 2026-10-24
+
+### Fixed
+
+- The activity message now renders thinking as a compact quote block with
+  proper paragraphs, headings, bullets, bold, and inline code instead of one
+  flattened, truncated line of raw Markdown.
+- Activity messages are edited with Telegram HTML safely; output is escaped and
+  falls back to plain text if Telegram rejects an entity.
+- Long activity logs trim the oldest whole entries instead of slicing the first
+  line mid-word.
+- Tool entries show the first command line in monospace, so heredocs and other
+  multi-line commands no longer produce broken single-line log entries.
+- Separate thinking messages (`messages` mode) are sent as quote blocks with
+  escaped HTML, matching the activity-message formatting.
+
+## [0.10.0] - 2026-10-24
+
+### Added
+
+- `/compactmenu` and the combined **🗜️ Compact & Auto** keyboard button: one
+  menu for compacting now or opening the auto-compact panel.
+- The startup message now refreshes the reply keyboard, so layout changes appear
+  without sending `/start` or `/menu`.
+- Legacy reply-keyboard labels (`💰 Cost`, `🔄 Auto-Compact`) are still mapped to
+  their commands for clients showing an older keyboard.
+
+### Changed
+
+- The reply keyboard now shows **⚙️ Settings** directly and no longer shows
+  **💰 Cost**; `/cost` and `/status` still provide cost information.
+
+## [0.9.0] - 2026-10-24
+
+### Added
+
+- `thinkingLanguage` setting to ask the model to write thinking blocks in a
+  specific language (`id`, `en`, or a language name). The final answer keeps the
+  user's language.
+
+### Changed
+
+- `full` is now the default progress mode: thinking and all tool actions stream
+  in one activity message, while answer steps remain separate messages.
+- Sessions without an explicit `/progress` choice follow the configured default;
+  choosing a mode in the menu or with `/progress` pins it.
+
+## [0.8.0] - 2026-10-24
+
+### Added
+
+- `full` progress mode: thinking and tool actions stream together in one
+  activity message, while answer steps remain separate messages.
+
+### Changed
+
+- `/progress` now offers four modes: `full`, `messages`, `stream`, and `off`.
+- `stream` now means "tools only stream": thinking is hidden and answer steps
+  remain separate messages.
+- `messages` remains the default: tools stream; thinking and answer steps are
+  separate messages.
+
+## [0.7.1] - 2026-10-24
+
+### Changed
+
+- Thinking is now sent as its own Telegram message (full text, no truncation)
+  in both `messages` and `stream` modes.
+- Only tool actions are combined into the streamed activity message. Answer
+  steps and thinking remain separate messages.
+
+## [0.7.0] - 2026-10-24
+
+### Added
+
+- Thinking blocks from `stream-json` are shown in the activity message
+  (`🤔 Thinking: …`, truncated to 700 characters).
+
+### Changed
+
+- `messages` mode no longer sends every tool call as its own Telegram message.
+  Answer steps still arrive as separate messages, but thinking and all tool
+  actions now share one activity message edited in place.
+- `stream` mode also includes thinking blocks; the final answer remains a
+  separate message.
+- Both streaming modes keep the activity message under Telegram's 4096-character
+  limit.
+
+## [0.6.0] - 2026-10-24
+
+### Added
+
+- Inline settings menus: `/model` and `/effort` now open tap-to-select panels
+  instead of asking for a command argument.
+- `/settings` hub with buttons for model, effort, folder, progress mode, and
+  auto-compact.
+- `/cwd` opens a picker of the current, home, workspace, and recently used
+  session folders.
+- The model picker lists Zero's tier aliases plus the provider models cached in
+  `~/.zero/config.json`.
+- Inline panels include a **⬅️ Settings** button, and keep a checkmark on the
+  active value.
+
+### Changed
+
+- The reply keyboard's **🔄 Auto-Compact** button is replaced by **⚙️ Settings**;
+  auto-compact is still available from the hub and `/autocompact`.
+- **Model**, **Effort**, and **Folder** keyboard buttons now open inline menus.
+
 ## [0.5.0] - 2026-10-24
 
 ### Added

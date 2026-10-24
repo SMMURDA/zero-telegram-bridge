@@ -9,5 +9,6 @@
   "maxFileBytes": 20971520,
   "autoCompact": false,
   "autoCompactThreshold": 0.75,
-  "progressMode": "messages"
+  "progressMode": "full",
+  "thinkingLanguage": "auto"
 }

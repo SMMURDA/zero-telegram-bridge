@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.10.1-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -21,11 +21,12 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - ⏹️ **ESC-like stop** — `/stop` sends `SIGINT` first, then escalates, so you can give the agent a new direction immediately.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
 - 🧠 **Per-chat settings** — model, effort, and working directory independent of any terminal session.
-- 📡 **Live progress** — `messages` mode posts each assistant step and tool action as its own Telegram message; `stream` mode edits one message in place.
+- 🎛️ **Inline settings menus** — one-tap pickers for model, effort, folder, progress, and auto-compact; no commands required.
+- 📡 **Live progress** — choose how thinking, tool actions, and answer steps are shown. Tools always stream in one edited message; thinking and answers can be separate messages or join the stream.
 - ✨ **Markdown rendering** — bold, italic, code blocks, links, headings, and quotes render properly in Telegram instead of showing literal markers.
 - 📎 **Attachments** — photos, documents, voice notes, and videos are downloaded and handed to the agent.
 - ↩️ **Reply context** — quoting a Telegram message includes the quoted text in the prompt.
-- ⌨️ **Reply keyboard** — Session, Resume, Model, Effort, Folder, Status, Cost, Stop, Help.
+- ⌨️ **Reply keyboard** — Session, Resume, Model, Effort, Folder, Status, Stop, Compact & Auto, Settings, Help.
 - 🐚 **Shell passthrough** — `!ls -la` runs in the working directory.
 - 💰 **Cost tracking** — `/cost` reads `total_cost_usd` from Zero's JSON output.
 - 🔒 **Owner allowlist** — every update is checked against `allowedChatIds`.
@@ -136,7 +137,8 @@ If your host tears down every process when the CLI exits, the bridge will stop w
 | `maxFileBytes` | `ZERO_MAX_FILE_BYTES` | `20971520` | Attachment size limit (20 MB) |
 | `autoCompact` | `ZERO_BRIDGE_AUTO_COMPACT` | `false` | Default auto-compact state for new chats (`1` enables) |
 | `autoCompactThreshold` | `ZERO_BRIDGE_AUTO_COMPACT_THRESHOLD` | `0.75` | Context fraction that triggers auto-compact |
-| `progressMode` | `ZERO_BRIDGE_PROGRESS_MODE` | `messages` | Progress display: `messages`, `stream`, or `off` |
+| `progressMode` | `ZERO_BRIDGE_PROGRESS_MODE` | `full` | Progress display: `full`, `messages`, `stream`, or `off` |
+| `thinkingLanguage` | `ZERO_THINKING_LANGUAGE` | `auto` | Language for thinking blocks: `auto`, `id`, `en`, or a language name |
 
 Environment variables take precedence. If `TELEGRAM_ALLOWED_CHAT_IDS` is set, it replaces the file list.
 
@@ -154,12 +156,14 @@ Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in 
 | `/resume <number\|id>` | Resume a specific session |
 | `/sessions` | Recent sessions for the working directory |
 | `/compact [instructions]` | Summarize the conversation and free context |
+| `/compactmenu` | Combined Compact & Auto-compact menu (the keyboard button) |
 | `/autocompact` | Auto-compact status; enable/disable with inline confirmation |
-| `/progress` | Progress display: `messages`, `stream`, or `off` |
+| `/progress` | Progress display: `full`, `messages`, `stream`, or `off` |
 | `/status` | Model, effort, folder, queue, cost, context, uptime |
-| `/model [name]` | View or set the model |
-| `/effort [level]` | View or set effort |
-| `/cwd [path]` | View or set the working directory |
+| `/settings` | Inline menu for model, effort, folder, progress, and auto-compact |
+| `/model [name]` | Inline model picker, or set a model directly |
+| `/effort [level]` | Inline effort picker, or set effort directly |
+| `/cwd [path]` | Inline recent-folder picker, or set the working directory |
 | `/cost` | Session and lifetime cost |
 | `/stop` | Interrupt the running task (SIGINT, then escalate) and clear the queue |
 | `/ping` | Liveness check |
@@ -178,9 +182,20 @@ Unknown slash commands are forwarded to Zero, so skills such as `/commit` keep w
 ```
 🆕 New Session   🗂️ Sessions   ⏪ Resume
 🧠 Model         ⚙️ Effort     📁 Folder
-📊 Status        💰 Cost       ⏹️ Stop
-🗜️ Compact       🔄 Auto-Compact   ❓ Help
+📊 Status        ⚙️ Settings   ⏹️ Stop
+🗜️ Compact & Auto              ❓ Help
 ```
+
+**Compact & Auto** opens one menu for manual compaction and the auto-compact
+settings. **Cost** was removed from the keyboard because `/status` already shows
+it; `/cost` remains available as a command.
+
+Tapping **Model**, **Effort**, **Folder**, or **Settings** opens an inline
+keyboard. The Settings hub also exposes progress mode and auto-compact, so every
+setting is reachable without typing a command. The model picker combines Zero's
+built-in tier aliases (`pro`, `flash`, `lite`) with the provider models Zero has
+cached in `~/.zero/config.json`; `/model <provider-id>` still accepts any model
+ID directly.
 
 ## Compaction
 
@@ -225,29 +240,66 @@ Process verification uses `/proc` on Linux; on other platforms the registry entr
 
 Use `/progress` to switch how work is shown:
 
-- **messages** (default) — every assistant step and tool action is its own Telegram message. Assistant text between tool calls is included, not just tool calls:
+- **full** (default) — thinking and all tool actions share one activity message; answer steps are separate:
 
   ```
   💬
   I'll check the files first.
 
-  🔧 Bash: ls -la
-  📖 Read: src/bridge.js
-  ```
-
-- **stream** — one message edited in place with the tool actions:
-
-  ```
   🧠 Working… 18s
 
-  [3s] 🔧 Bash: ls -la
-  [7s] 📖 Read: src/bridge.js
-  [11s] ✏️ Edit: src/bridge.js
+  [3s] 🤔 Thinking
+  > **Plan**
+  > • list the files
+  > • read the bridge
+
+  [7s] 🔧 Bash
+  > ls -la
+
+  [11s] 📖 Read
+  > src/bridge.js
+  ```
+
+- **messages** — tool actions share one activity message; thinking and answer steps are separate:
+
+  ```
+  🤔 Thinking
+  > **Plan**
+  > • list the files
+  > • read the bridge
+
+  💬
+  I'll check the files first.
+
+  🧠 Working… 18s
+
+  [7s] 🔧 Bash
+  > ls -la
+
+  [11s] 📖 Read
+  > src/bridge.js
+  ```
+
+- **stream** — only tool actions stream in one activity message; thinking is hidden; answer steps are separate:
+
+  ```
+  💬
+  I'll check the files first.
+
+  🧠 Working… 18s
+
+  [7s] 🔧 Bash
+  > ls -la
+
+  [11s] 📖 Read
+  > src/bridge.js
   ```
 
 - **off** — only the final answer.
 
-Messages mode sends steps in order with a small throttle (~3 per second) and always sends the final answer last. Stream mode keeps the latest 14 steps and finalizes the header with `✅ Done`, `⏹️ Stopped`, `⏱️ Timed out`, or `❌ Failed`. Recognized activities: Bash, Read, Edit/MultiEdit/Write, Grep/Glob, WebFetch/WebSearch, Agent/Task, plus a generic fallback.
+All modes except `off` send answer steps in order with a small throttle (~3 per second) and always send the final answer last. In `full`, thinking is rendered as a quote block with its line structure and common Markdown preserved, capped at 12 lines / ~900 characters. The activity message keeps the latest 14 entries (thinking or tools) and trims the oldest entry as a whole, never a partial line. It finalizes the header with `✅ Done`, `⏹️ Stopped`, `⏱️ Timed out`, or `❌ Failed`. Recognized activities: Bash, Read, Edit/MultiEdit/Write, Grep/Glob, WebFetch/WebSearch, Agent/Task, plus a generic fallback; tool detail is shown in monospace.
+
+When `thinkingLanguage` is set (for example `"id"`), the bridge appends a system instruction asking the model to write its thinking blocks in that language. The final answer still follows the language of the request. Set it to `"auto"` to leave thinking language to the model.
 
 ## Formatting
 

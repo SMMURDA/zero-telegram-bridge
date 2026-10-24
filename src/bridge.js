@@ -24,7 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { spawn, execFile } = require('child_process');
-const { toTelegramHtml, splitMarkdown } = require('./markdown');
+const { toTelegramHtml, splitMarkdown, escapeHtml } = require('./markdown');
 const {
   discoverSessions,
   findActiveSession,
@@ -50,6 +50,7 @@ const STATE_PATH = path.join(RUNTIME_DIR, 'state.json');
 const LOG_PATH = path.join(RUNTIME_DIR, 'bridge.log');
 
 const HOME = process.env.HOME || '/home/zero';
+const PROGRESS_MODES = ['full', 'messages', 'stream', 'off'];
 
 let fileConfig = {};
 try {
@@ -80,13 +81,16 @@ const config = {
   autoCompactThreshold: Number(
     process.env.ZERO_BRIDGE_AUTO_COMPACT_THRESHOLD || fileConfig.autoCompactThreshold || 0.75
   ),
-  progressMode: process.env.ZERO_BRIDGE_PROGRESS_MODE || fileConfig.progressMode || 'messages'
+  progressMode: process.env.ZERO_BRIDGE_PROGRESS_MODE || fileConfig.progressMode || 'full',
+  thinkingLanguage: String(
+    process.env.ZERO_THINKING_LANGUAGE || fileConfig.thinkingLanguage || 'auto'
+  ).trim() || 'auto'
 };
 if (!(config.autoCompactThreshold > 0.1 && config.autoCompactThreshold < 0.98)) {
   config.autoCompactThreshold = 0.75;
 }
-if (!['messages', 'stream', 'off'].includes(config.progressMode)) {
-  config.progressMode = 'messages';
+if (!PROGRESS_MODES.includes(config.progressMode)) {
+  config.progressMode = 'full';
 }
 
 if (!config.token) {
@@ -120,6 +124,54 @@ const TELEGRAM_SYSTEM_PROMPT =
   'interactive UI tools. If you need clarification, ask in plain text in ' +
   'your final reply.';
 
+function thinkingLanguage(s) {
+  const raw = String((s && s.thinkingLanguage) || '').trim();
+  const key = raw.toLowerCase();
+  if (!key || ['auto', 'off', 'default', 'none'].includes(key)) return null;
+  if (key === 'id' || key === 'indonesian' || key === 'bahasa') {
+    return { key: 'id', label: 'Indonesian (Bahasa Indonesia)' };
+  }
+  if (key === 'en' || key === 'english') return { key: 'en', label: 'English' };
+  return { key, label: raw };
+}
+
+function thinkingLanguagePrompt(s) {
+  const lang = thinkingLanguage(s);
+  if (!lang) return '';
+  if (lang.key === 'id') {
+    return ' PENTING: Semua proses berpikir/internal thinking WAJIB ditulis dalam ' +
+      'Bahasa Indonesia, bahkan jika pengguna menulis dalam bahasa lain. Jangan menulis ' +
+      'thinking dalam bahasa Inggris. Jawaban akhir tetap menggunakan bahasa pengguna. ' +
+      'Jangan terjemahkan kode, perintah, path file, atau identifier teknis.';
+  }
+  return ' Write all internal thinking/reasoning blocks in ' + lang.label +
+    ', even if the user writes in another language. Keep code, commands, file paths, ' +
+    'and technical identifiers unchanged. The final answer should use the user\'s ' +
+    'language; this instruction only applies to thinking.';
+}
+
+// A user-turn hint works more reliably than the system prompt alone for
+// reasoning models. Slash commands are left untouched so /compact and skills
+// still parse correctly.
+function thinkingLanguageHint(s) {
+  const lang = thinkingLanguage(s);
+  if (!lang) return '';
+  const instruction = lang.key === 'id'
+    ? 'Seluruh proses berpikir/internal thinking HARUS dalam Bahasa Indonesia. ' +
+      'Dilarang menulis thinking dalam bahasa Inggris. Jawaban akhir ikuti bahasa pengguna. ' +
+      'Jangan terjemahkan kode, perintah, path file, atau identifier teknis.'
+    : 'Write all internal thinking/reasoning in ' + lang.label + '. ' +
+      'The final answer must use the user\'s language. Do not translate code, ' +
+      'commands, file paths, or technical identifiers.';
+  return `[ATURAN WAJIB: ${instruction}]`;
+}
+
+function promptWithThinkingLanguage(prompt, s) {
+  if (String(prompt || '').trimStart().startsWith('/')) return prompt;
+  const hint = thinkingLanguageHint(s);
+  return hint ? `${hint}\n\n${prompt}` : prompt;
+}
+
 const KB = {
   newSession: '🆕 New Session',
   sessions: '🗂️ Sessions',
@@ -128,10 +180,9 @@ const KB = {
   effort: '⚙️ Effort',
   cwd: '📁 Folder',
   status: '📊 Status',
-  cost: '💰 Cost',
   stop: '⏹️ Stop',
-  compact: '🗜️ Compact',
-  autoCompact: '🔄 Auto-Compact',
+  compact: '🗜️ Compact & Auto',
+  settings: '⚙️ Settings',
   help: '❓ Help'
 };
 
@@ -139,8 +190,8 @@ const MAIN_KEYBOARD = {
   keyboard: [
     [{ text: KB.newSession }, { text: KB.sessions }, { text: KB.resume }],
     [{ text: KB.model }, { text: KB.effort }, { text: KB.cwd }],
-    [{ text: KB.status }, { text: KB.cost }, { text: KB.stop }],
-    [{ text: KB.compact }, { text: KB.autoCompact }, { text: KB.help }]
+    [{ text: KB.status }, { text: KB.settings }, { text: KB.stop }],
+    [{ text: KB.compact }, { text: KB.help }]
   ],
   resize_keyboard: true,
   is_persistent: true,
@@ -155,11 +206,14 @@ const KEYBOARD_MAP = {
   [KB.effort]: '/effort',
   [KB.cwd]: '/cwd',
   [KB.status]: '/status',
-  [KB.cost]: '/cost',
   [KB.stop]: '/stop',
-  [KB.compact]: '/compact',
-  [KB.autoCompact]: '/autocompact',
-  [KB.help]: '/help'
+  [KB.compact]: '/compactmenu',
+  [KB.settings]: '/settings',
+  [KB.help]: '/help',
+  // Legacy reply keyboards cached by Telegram clients.
+  '💰 Cost': '/cost',
+  '🔄 Auto-Compact': '/autocompact',
+  '🗜️ Compact': '/compactmenu'
 };
 
 const BOT_COMMANDS = [
@@ -172,6 +226,7 @@ const BOT_COMMANDS = [
   { command: 'compact', description: '🗜️ Compact context' },
   { command: 'autocompact', description: '🔄 Toggle auto-compact' },
   { command: 'progress', description: '💬 Progress display mode' },
+  { command: 'settings', description: '⚙️ Settings menu' },
   { command: 'status', description: '📊 Bridge status & queue' },
   { command: 'model', description: '🧠 View or set model' },
   { command: 'effort', description: '⚙️ View or set effort' },
@@ -202,7 +257,7 @@ I'm your Zero agent on Telegram. I can chat, read and write files, run commands,
 • /new — start a new conversation
 • /status — check bridge status
 • /compact — summarize and free context
-• /model — switch models
+• /settings — tap-to-change model, effort, folder, and more
 
 🔒 Full-auto mode. Only your chat ID is served.`;
 
@@ -219,17 +274,19 @@ const HELP = `📖 ZERO HELP
 /resume — list sessions in the working directory
 /resume <number|id> — resume a specific session
 /sessions — recent sessions
-/compact [instructions] — summarize and free context
+/compact [instructions] — summarize now
+/compactmenu — Compact & Auto menu (also the keyboard button)
 /status — model, effort, folder, queue, cost, context
 /stop — interrupt the running task (SIGINT) and clear the queue
 
 🧠 Settings
-/model [name] — view or set model
-/effort [low|medium|high|max] — set effort
-/cwd [path] — view or set working directory
+/settings — inline menu for model, effort, folder, progress, auto-compact
+/model — inline model picker; /model <name> to set directly
+/effort — inline effort picker; /effort <level> to set directly
+/cwd — recent folders to pick; /cwd <path> to set directly
 /cost — session and total cost
-/autocompact — toggle auto-compact (with confirmation)
-/progress — progress display: messages / stream / off
+/autocompact — auto-compact panel (inline buttons)
+/progress — full / messages / stream / off (tap-to-pick menu)
 /menu — show the keyboard
 /id — your chat ID
 /ping — check bridge health
@@ -292,13 +349,16 @@ function sessionFor(chatId) {
       autoCompact: config.autoCompact,
       autoCompactThreshold: config.autoCompactThreshold,
       progressMode: config.progressMode,
+      progressModeExplicit: false,
+      thinkingLanguage: config.thinkingLanguage,
       lastContextTokens: 0,
       contextWindow: null,
       contextPct: 0,
       contextSource: 'bot',
       lastCompactAt: null,
       autoCompactFailedAt: 0,
-      pendingResume: null
+      pendingResume: null,
+      cwdMenus: {}
     };
   }
   const s = state.sessions[id];
@@ -307,12 +367,20 @@ function sessionFor(chatId) {
   if (!s.effort) s.effort = config.effort;
   if (typeof s.autoCompact !== 'boolean') s.autoCompact = config.autoCompact;
   if (typeof s.autoCompactThreshold !== 'number') s.autoCompactThreshold = config.autoCompactThreshold;
-  if (!['messages', 'stream', 'off'].includes(s.progressMode)) s.progressMode = config.progressMode;
+  if (!PROGRESS_MODES.includes(s.progressMode)) s.progressMode = config.progressMode;
+  if (typeof s.progressModeExplicit !== 'boolean') s.progressModeExplicit = false;
+  if (!s.progressModeExplicit) s.progressMode = config.progressMode;
+  if (typeof s.thinkingLanguage !== 'string' || !s.thinkingLanguage.trim()) {
+    s.thinkingLanguage = config.thinkingLanguage;
+  }
   if (typeof s.lastContextTokens !== 'number') s.lastContextTokens = 0;
   if (typeof s.contextPct !== 'number') s.contextPct = 0;
   if (!s.contextSource) s.contextSource = 'bot';
   if (typeof s.autoCompactFailedAt !== 'number') s.autoCompactFailedAt = 0;
   if (!('pendingResume' in s)) s.pendingResume = null;
+  if (!s.cwdMenus || typeof s.cwdMenus !== 'object' || Array.isArray(s.cwdMenus)) {
+    s.cwdMenus = {};
+  }
   return s;
 }
 
@@ -445,6 +513,26 @@ async function sendFormatted(chatId, markdown, extra = {}) {
   }
 }
 
+// Thinking is shown in a quote block so long, multi-paragraph reasoning stays
+// visually separate from the answer and cannot break the surrounding message.
+async function sendThinkingMessage(chatId, markdown) {
+  const chunks = splitMarkdown(String(markdown == null ? '' : markdown), 2400);
+  for (const chunk of chunks) {
+    const html = toTelegramHtml(chunk) || escapeHtml(chunk);
+    try {
+      await api('sendMessage', {
+        chat_id: chatId,
+        text: `🤔 <b>Thinking</b>\n\n<blockquote>${html}</blockquote>`,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      });
+    } catch (e) {
+      log('thinking send failed:', e.message);
+      await send(chatId, `🤔 Thinking\n\n${chunk}`);
+    }
+  }
+}
+
 function splitMessage(text) {
   if (text.length <= CHUNK) return [text];
   const chunks = [];
@@ -478,48 +566,136 @@ function oneLine(text, max = 140) {
     .slice(0, max);
 }
 
-function formatToolUse(name, input) {
+function firstLine(text, max = 160) {
+  const line = String(text == null ? '' : text)
+    .split('\n')
+    .map(part => part.trim())
+    .find(Boolean) || '';
+  return oneLine(line, max);
+}
+
+function describeTool(name, input) {
   const inp = input || {};
   const file = inp.file_path || inp.path || inp.notebook_path || '';
   switch (name) {
     case 'Bash':
-      return `🔧 Bash: ${oneLine(inp.command, 170)}`;
+      return { icon: '🔧', label: 'Bash', detail: firstLine(inp.command, 160) };
     case 'Read':
-      return `📖 Read: ${oneLine(file, 140)}`;
+      return { icon: '📖', label: 'Read', detail: oneLine(file, 140) };
     case 'Edit':
     case 'MultiEdit':
-      return `✏️ ${name}: ${oneLine(file, 140)}`;
+      return { icon: '✏️', label: name, detail: oneLine(file, 140) };
     case 'Write':
-      return `📝 Write: ${oneLine(file, 140)}`;
-    case 'Grep':
-      return `🔍 Grep: ${oneLine(inp.pattern, 90)}` +
-        (inp.path ? ` in ${oneLine(inp.path, 60)}` : '');
+      return { icon: '📝', label: 'Write', detail: oneLine(file, 140) };
+    case 'Grep': {
+      const parts = [oneLine(inp.pattern, 90)];
+      if (inp.path) parts.push(`in ${oneLine(inp.path, 60)}`);
+      return { icon: '🔍', label: 'Grep', detail: parts.join(' ') };
+    }
     case 'Glob':
-      return `🔎 Glob: ${oneLine(inp.pattern, 110)}`;
+      return { icon: '🔎', label: 'Glob', detail: oneLine(inp.pattern, 110) };
     case 'WebFetch':
-      return `🌐 Fetch: ${oneLine(inp.url, 140)}`;
+      return { icon: '🌐', label: 'Fetch', detail: oneLine(inp.url, 140) };
     case 'WebSearch':
-      return `🔎 Web: ${oneLine(inp.query, 140)}`;
+      return { icon: '🔎', label: 'Web', detail: oneLine(inp.query, 140) };
     case 'Task':
     case 'Agent':
-      return `🤖 Agent: ${oneLine(inp.description || inp.prompt, 140)}`;
+      return { icon: '🤖', label: 'Agent', detail: oneLine(inp.description || inp.prompt, 140) };
     case 'TodoWrite':
-      return '📋 Todos updated';
+      return { icon: '📋', label: 'Todos updated', detail: '' };
     default: {
       const hint = inp.command || inp.file_path || inp.path ||
         inp.pattern || inp.query || inp.url || '';
-      return `🛠️ ${name}${hint ? `: ${oneLine(hint, 140)}` : ''}`;
+      return { icon: '🛠️', label: name || 'Tool', detail: oneLine(hint, 140) };
     }
   }
 }
 
+// Thinking arrives as raw model text. Keep its line structure, render the
+// common Markdown constructs, and show the result as a compact quote instead
+// of flattening it into one very long, unreadable line.
+function formatThinkingLine(line) {
+  let s = String(line == null ? '' : line).replace(/\s+$/, '');
+  if (!s.trim()) return '';
+  s = s.trim();
+  if (/^```/.test(s)) return '';
+  const heading = /^#{1,6}\s+/.test(s);
+  s = s.replace(/^#{1,6}\s+/, '');
+  s = s.replace(/^>\s?/, '');
+  s = s.replace(/^[-*+]\s+/, '• ');
+  s = s.replace(/^([-*_])\1{2,}$/, '────────');
+  s = escapeHtml(s);
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '<b><i>$1</i></b>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  s = s.replace(/__([^_]+)__/g, '<b>$1</b>');
+  s = s.replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, '$1<i>$2</i>');
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<i>$2</i>');
+  return heading ? `<b>${s}</b>` : s;
+}
+
+function thinkingHtml(text, max = 900) {
+  let raw = String(text || '').replace(/\r/g, '').trim();
+  if (!raw) return '';
+  let truncated = false;
+  if (raw.length > max) {
+    raw = raw.slice(0, max).replace(/\s+\S*$/, '');
+    truncated = true;
+  }
+
+  const out = [];
+  for (const line of raw.split('\n')) {
+    if (out.filter(Boolean).length >= 12) {
+      truncated = true;
+      break;
+    }
+    const formatted = formatThinkingLine(line);
+    if (!formatted) {
+      if (out.length && out[out.length - 1] !== '') out.push('');
+      continue;
+    }
+    out.push(formatted);
+  }
+  while (out.length && out[out.length - 1] === '') out.pop();
+
+  let html = out.join('\n');
+  // A hard cut can strand an opening marker such as "**" or a lone backtick.
+  html = html.replace(/(\*\*|__|`)+\s*$/, '').trimEnd();
+  if (truncated) html += (html ? '\n' : '') + '…';
+  return html;
+}
+
+function renderActivityEntry(entry) {
+  const when = `[${entry.at}s]`;
+  if (entry.kind === 'thinking') {
+    const body = thinkingHtml(entry.text);
+    if (!body) return '';
+    return `${when} 🤔 <b>Thinking</b>\n<blockquote>${body}</blockquote>`;
+  }
+  const detail = entry.detail
+    ? `\n<code>${escapeHtml(entry.detail)}</code>`
+    : '';
+  return `${when} ${entry.icon} <b>${escapeHtml(entry.label)}</b>${detail}`;
+}
+
+function stripHtml(text) {
+  return String(text || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(blockquote|p|div)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
 // One Telegram message per job, edited as tools run. The message is created
-// lazily on the first tool call, so simple replies do not leave clutter.
+// lazily on the first thinking block or tool call, so simple replies stay
+// clean. Entries are trimmed whole, never sliced mid-line.
 function createStreamProgress(chatId) {
   const started = Date.now();
   let msg = null;
   let ensurePromise = null;
-  let lines = [];
+  let entries = [];
   let total = 0;
   let closed = false;
   let chain = Promise.resolve();
@@ -533,7 +709,8 @@ function createStreamProgress(chatId) {
     if (!ensurePromise) {
       ensurePromise = api('sendMessage', {
         chat_id: chatId,
-        text: '🧠 Working…',
+        text: '🧠 <b>Working…</b>',
+        parse_mode: 'HTML',
         disable_web_page_preview: true
       }).then(m => {
         msg = m;
@@ -546,23 +723,56 @@ function createStreamProgress(chatId) {
     return ensurePromise;
   };
 
-  const render = () => {
-    const hidden = total - lines.length;
-    const note = hidden > 0
-      ? `… ${hidden} earlier step${hidden === 1 ? '' : 's'}\n`
-      : '';
-    return `🧠 Working… ${elapsed()}s\n\n${note}${lines.join('\n')}`;
+  const build = header => {
+    let visible = entries.slice();
+    let hidden = total - visible.length;
+    const compose = () => {
+      const note = hidden > 0
+        ? `… <i>${hidden} earlier step${hidden === 1 ? '' : 's'}</i>\n\n`
+        : '';
+      const body = visible
+        .map(renderActivityEntry)
+        .filter(Boolean)
+        .join('\n\n');
+      return `${header}\n\n${note}${body}`;
+    };
+    let text = compose();
+    while (text.length > 3900 && visible.length > 1) {
+      visible.shift();
+      hidden++;
+      text = compose();
+    }
+    return text;
   };
 
-  const edit = (text) => {
+  const render = () => build(`🧠 <b>Working…</b> ${elapsed()}s`);
+
+  const edit = text => {
     if (!msg) return Promise.resolve();
-    chain = chain.then(() => api('editMessageText', {
-      chat_id: chatId,
-      message_id: msg.message_id,
-      text,
-      disable_web_page_preview: true
-    })).catch(e => {
-      if (!/not modified/i.test(e.message)) log('progress edit failed:', e.message);
+    chain = chain.then(async () => {
+      try {
+        await api('editMessageText', {
+          chat_id: chatId,
+          message_id: msg.message_id,
+          text,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true
+        });
+      } catch (e) {
+        if (/not modified/i.test(e.message)) return;
+        log('progress edit failed:', e.message);
+        // A malformed entity must never freeze the activity message.
+        try {
+          await api('editMessageText', {
+            chat_id: chatId,
+            message_id: msg.message_id,
+            text: stripHtml(text),
+            disable_web_page_preview: true
+          });
+        } catch (e2) {
+          log('progress plain edit failed:', e2.message);
+        }
+      }
     });
     return chain;
   };
@@ -578,14 +788,32 @@ function createStreamProgress(chatId) {
     }, wait);
   };
 
+  const addEntry = entry => {
+    if (closed) return;
+    total++;
+    entries.push(entry);
+    if (entries.length > 14) entries = entries.slice(-14);
+    ensure().then(ok => { if (ok) schedule(); });
+  };
+
   return {
     addText() {},
+    addThinking(text) {
+      if (closed) return;
+      const raw = String(text || '').trim();
+      if (!raw) return;
+      const last = entries[entries.length - 1];
+      if (last && last.kind === 'thinking') {
+        // Consecutive thinking blocks are revisions of the same thought.
+        last.text = raw;
+        ensure().then(ok => { if (ok) schedule(); });
+        return;
+      }
+      addEntry({ kind: 'thinking', at: elapsed(), text: raw });
+    },
     addTool(name, input) {
       if (closed) return;
-      total++;
-      lines.push(`[${elapsed()}s] ${formatToolUse(name, input)}`);
-      if (lines.length > 14) lines = lines.slice(-14);
-      ensure().then(ok => { if (ok) schedule(); });
+      addEntry({ kind: 'tool', at: elapsed(), ...describeTool(name, input) });
     },
     async flush() {
       await ensurePromise;
@@ -599,29 +827,27 @@ function createStreamProgress(chatId) {
         flushTimer = null;
       }
       await ensurePromise;
-      if (!msg) return; // No tool calls: no progress message to finalize.
+      if (!msg) return; // No activity: nothing to finalize.
       await chain;
 
       const secs = elapsed();
       let header;
-      if (opts.ok) header = `✅ Done in ${secs}s`;
-      else if (opts.status === 'stopped') header = `⏹️ Stopped after ${secs}s`;
-      else if (opts.status === 'timeout') header = `⏱️ Timed out after ${secs}s`;
-      else header = `❌ Failed after ${secs}s`;
-
-      const hidden = total - lines.length;
-      const note = hidden > 0
-        ? `… ${hidden} earlier step${hidden === 1 ? '' : 's'}\n`
-        : '';
-      let text = `${header}\n\n${note}${lines.join('\n')}`;
-      if (text.length > 3900) text = text.slice(text.length - 3900);
-      await edit(text);
+      if (opts.ok) header = `✅ <b>Done</b> in ${secs}s`;
+      else if (opts.status === 'stopped') header = `⏹️ <b>Stopped</b> after ${secs}s`;
+      else if (opts.status === 'timeout') header = `⏱️ <b>Timed out</b> after ${secs}s`;
+      else header = `❌ <b>Failed</b> after ${secs}s`;
+      await edit(build(header));
     }
   };
 }
 
-// One Telegram message per assistant step and tool action, in order.
-function createMessageProgress(chatId) {
+// Tool calls always share one editable activity message. Thinking and answer
+// steps can either join that stream or be sent as separate messages.
+function createActivityProgress(chatId, options = {}) {
+  const answerSteps = options.answerSteps !== false;
+  const streamThinking = Boolean(options.streamThinking);
+  const showThinking = options.showThinking !== false;
+  const activity = createStreamProgress(chatId);
   let chain = Promise.resolve();
   let lastSend = 0;
   let accepting = true;
@@ -642,7 +868,7 @@ function createMessageProgress(chatId) {
 
   return {
     addText(text, key) {
-      if (!accepting) return;
+      if (!answerSteps || !accepting) return;
       const body = String(text || '').trim();
       if (!body) return;
       if (key && seen.has(key)) return;
@@ -654,23 +880,38 @@ function createMessageProgress(chatId) {
         lastTextOk = true;
       });
     },
+    addThinking(text, key) {
+      if (!accepting) return;
+      const body = String(text || '').trim();
+      if (!body) return;
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
+      // Thinking after text means the earlier text was not the final answer.
+      lastText = '';
+      lastTextOk = false;
+      if (streamThinking) activity.addThinking(body);
+      else if (showThinking) {
+        queue(() => sendThinkingMessage(chatId, body));
+      }
+    },
     addTool(name, input, key) {
       if (!accepting) return;
       if (key && seen.has(key)) return;
       if (key) seen.add(key);
-      // A tool after text means the earlier text was not the final answer.
       lastText = '';
       lastTextOk = false;
-      queue(() => sendFormatted(chatId, formatToolUse(name, input)));
+      activity.addTool(name, input);
     },
     getLastText() { return lastText; },
     getLastTextOk() { return lastTextOk; },
     async flush() {
       await chain;
+      await activity.flush();
     },
-    async finish() {
+    async finish(opts = {}) {
       accepting = false;
       await chain;
+      await activity.finish(opts);
     }
   };
 }
@@ -679,6 +920,7 @@ function createProgress(chatId, mode = 'messages') {
   if (mode === 'off') {
     return {
       addText() {},
+      addThinking() {},
       addTool() {},
       getLastText() { return ''; },
       getLastTextOk() { return false; },
@@ -687,12 +929,12 @@ function createProgress(chatId, mode = 'messages') {
     };
   }
   if (mode === 'stream') {
-    return Object.assign(createStreamProgress(chatId), {
-      getLastText() { return ''; },
-      getLastTextOk() { return false; }
-    });
+    return createActivityProgress(chatId, { showThinking: false });
   }
-  return createMessageProgress(chatId);
+  if (mode === 'full') {
+    return createActivityProgress(chatId, { streamThinking: true });
+  }
+  return createActivityProgress(chatId);
 }
 
 // ------------------------------------------------------------------- Zero CLI
@@ -728,12 +970,13 @@ function requestStop(job) {
 function zeroArgs(prompt, s, stream = true) {
   const args = ['-p', '--output-format', stream ? 'stream-json' : 'json'];
   if (stream) args.push('--verbose');
+  const systemPrompt = TELEGRAM_SYSTEM_PROMPT + thinkingLanguagePrompt(s);
   args.push(
     '--dangerously-skip-permissions',
     '--model', s.model,
     '--effort', s.effort,
     '--disallowedTools', 'AskUserQuestion',
-    '--append-system-prompt', TELEGRAM_SYSTEM_PROMPT
+    '--append-system-prompt', systemPrompt
   );
   if (s.resumeId) args.push('-r', s.resumeId);
   else if (!s.newSession) args.push('-c');
@@ -745,7 +988,7 @@ function runZero(prompt, s, onChild, control) {
   return new Promise((resolve, reject) => {
     const stream = !(control && control.stream === false);
     const progress = control && control.progress;
-    const args = zeroArgs(prompt, s, stream);
+    const args = zeroArgs(promptWithThinkingLanguage(prompt, s), s, stream);
     log('run zero', JSON.stringify({
       cwd: s.cwd,
       model: s.model,
@@ -800,10 +1043,13 @@ function runZero(prompt, s, onChild, control) {
         const messageId = evt.message.id || evt.message.uuid || 'msg';
 
         content.forEach((block, index) => {
-          if (!block) return;
+          if (!block || !progress) return;
           if (block.type === 'text' &&
             typeof block.text === 'string' && block.text.trim()) {
             progress.addText(block.text, `text:${messageId}:${index}`);
+          } else if (block.type === 'thinking' &&
+            typeof block.thinking === 'string' && block.thinking.trim()) {
+            progress.addThinking(block.thinking, `thinking:${messageId}:${index}`);
           } else if (block.type === 'tool_use') {
             emitTool(block, `tool:${messageId}:${index}:${block.id || ''}`);
           }
@@ -1167,6 +1413,201 @@ function displayCwd(cwd) {
   return cwd;
 }
 
+// ------------------------------------------------------------ Inline settings
+const BUILTIN_MODELS = [
+  { value: 'pro', label: 'Pro' },
+  { value: 'flash', label: 'Flash' },
+  { value: 'lite', label: 'Lite' }
+];
+const EFFORTS = ['low', 'medium', 'high', 'max'];
+
+function readZeroConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(HOME, '.zero', 'config.json'), 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
+
+// Built-in tier aliases plus the model list Zero has cached locally.
+function modelChoices(s) {
+  const seen = new Set();
+  const out = [];
+  const add = (value, label, description) => {
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    out.push({ value, label: label || value, description: description || '' });
+  };
+
+  BUILTIN_MODELS.forEach(m => add(m.value, m.label));
+  const cached = readZeroConfig().additionalModelOptionsCache;
+  if (Array.isArray(cached)) {
+    for (const m of cached) {
+      if (!m) continue;
+      if (typeof m === 'string') add(m, m);
+      else add(m.value, m.label || m.value, m.description);
+    }
+  }
+  add(s.model, s.model);
+  return out;
+}
+
+function modelMenu(s) {
+  const models = modelChoices(s);
+  const rows = [];
+  for (let i = 0; i < models.length; i += 2) {
+    rows.push(models.slice(i, i + 2).map(m => ({
+      text: `${m.value === s.model ? '✅ ' : ''}${clip(m.label, 24)}`,
+      callback_data: `model:${m.value}`
+    })));
+  }
+  rows.push([{ text: '⬅️ Settings', callback_data: 'settings:main' }]);
+  return { inline_keyboard: rows };
+}
+
+function modelText(s) {
+  const current = modelChoices(s).find(m => m.value === s.model);
+  const desc = current && current.description ? ` — ${current.description}` : '';
+  return `🧠 Model\ncurrent: ${s.model}${desc}\n\n` +
+    'Tap a model below, or set any provider ID with /model <id>.';
+}
+
+async function showModel(chatId, s, editMessageId = null) {
+  await showPanel(chatId, modelText(s), modelMenu(s), editMessageId);
+}
+
+function effortMenu(s) {
+  const rows = [];
+  for (let i = 0; i < EFFORTS.length; i += 2) {
+    rows.push(EFFORTS.slice(i, i + 2).map(level => ({
+      text: `${s.effort === level ? '✅ ' : ''}${level[0].toUpperCase()}${level.slice(1)}`,
+      callback_data: `effort:${level}`
+    })));
+  }
+  rows.push([{ text: '⬅️ Settings', callback_data: 'settings:main' }]);
+  return { inline_keyboard: rows };
+}
+
+function effortText(s) {
+  return `⚙️ Effort\ncurrent: ${s.effort}\n\n` +
+    '• low — fastest, minimal reasoning\n' +
+    '• medium — balanced\n' +
+    '• high — deeper reasoning\n' +
+    '• max — most thorough, slowest\n\n' +
+    'Tap a level to switch, or use /effort <level>.';
+}
+
+async function showEffort(chatId, s, editMessageId = null) {
+  await showPanel(chatId, effortText(s), effortMenu(s), editMessageId);
+}
+
+function recentCwdChoices(s) {
+  const out = [];
+  const add = p => {
+    if (!p || !path.isAbsolute(p) || out.includes(p)) return;
+    try {
+      if (!fs.statSync(p).isDirectory()) return;
+    } catch (_) {
+      return;
+    }
+    out.push(p);
+  };
+  add(s.cwd);
+  add(config.workdir);
+  add(HOME);
+  for (const x of discoverSessions(HOME, 60)) add(x.cwd);
+  return out.slice(0, 9);
+}
+
+function cwdMenu(s, options, token) {
+  const rows = options.map((p, i) => [{
+    text: `${p === s.cwd ? '✅ ' : ''}📁 ${clip(displayCwd(p), 38)}`,
+    callback_data: `cwd:${token}:${i}`
+  }]);
+  rows.push([{ text: '⬅️ Settings', callback_data: 'settings:main' }]);
+  return { inline_keyboard: rows };
+}
+
+function cwdText(s) {
+  return `📁 Working directory\ncurrent: ${s.cwd}\n\n` +
+    'Tap a recent folder, or send /cwd /absolute/path.\n' +
+    'Changing folders starts a new session.';
+}
+
+async function showCwd(chatId, s, editMessageId = null) {
+  const options = recentCwdChoices(s);
+  const token = Math.random().toString(36).slice(2, 8);
+  const now = Date.now();
+  for (const [key, entry] of Object.entries(s.cwdMenus)) {
+    if (!entry || !Array.isArray(entry.options) || now - (entry.at || 0) > 30 * 60 * 1000) {
+      delete s.cwdMenus[key];
+    }
+  }
+  s.cwdMenus[token] = { options, at: now };
+  saveState();
+  await showPanel(chatId, cwdText(s), cwdMenu(s, options, token), editMessageId);
+}
+
+function changeCwd(s, target) {
+  s.cwd = target;
+  s.newSession = true;
+  s.resumeId = null;
+  s.pendingResume = null;
+  s.cwdMenus = {};
+  resetContext(s);
+  saveState();
+}
+
+function settingsText(s) {
+  return `⚙️ Settings\n` +
+    `🧠 model: ${s.model}\n` +
+    `⚙️ effort: ${s.effort}\n` +
+    `📁 folder: ${displayCwd(s.cwd)}\n` +
+    `💬 progress: ${s.progressMode}\n` +
+    `🔄 auto-compact: ${s.autoCompact ? 'ON' : 'OFF'} ` +
+    `(${Math.round(s.autoCompactThreshold * 100)}%)\n\n` +
+    'Tap a button to change it — no commands needed.';
+}
+
+function settingsMenu(s) {
+  return {
+    inline_keyboard: [
+      [
+        { text: `🧠 Model: ${clip(s.model, 20)}`, callback_data: 'settings:model' },
+        { text: `⚙️ Effort: ${s.effort}`, callback_data: 'settings:effort' }
+      ],
+      [{ text: `📁 Folder: ${clip(displayCwd(s.cwd), 32)}`, callback_data: 'settings:cwd' }],
+      [
+        { text: `💬 Progress: ${s.progressMode}`, callback_data: 'settings:progress' },
+        {
+          text: `🔄 Auto-compact: ${s.autoCompact ? 'ON' : 'OFF'}`,
+          callback_data: 'settings:autocompact'
+        }
+      ]
+    ]
+  };
+}
+
+async function showSettings(chatId, s, editMessageId = null) {
+  await showPanel(chatId, settingsText(s), settingsMenu(s), editMessageId);
+}
+
+async function showPanel(chatId, text, markup, editMessageId = null) {
+  if (editMessageId) {
+    try {
+      await api('editMessageText', {
+        chat_id: chatId,
+        message_id: editMessageId,
+        text,
+        reply_markup: markup,
+        disable_web_page_preview: true
+      });
+      return;
+    } catch (_) {}
+  }
+  await send(chatId, text, { reply_markup: markup });
+}
+
 function shortSessionLabel(x) {
   const date = new Date(x.mtime).toLocaleString('en-GB', {
     day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
@@ -1185,6 +1626,37 @@ function sessionsKeyboard(list) {
   return { inline_keyboard: rows };
 }
 
+function compactMenu(s) {
+  return {
+    inline_keyboard: [
+      [{ text: '🗜️ Compact now', callback_data: 'compact:now' }],
+      [{
+        text: `🔄 Auto-compact: ${s.autoCompact ? 'ON' : 'OFF'} ` +
+          `(${Math.round(s.autoCompactThreshold * 100)}%)`,
+        callback_data: 'compact:auto'
+      }],
+      [{ text: '⬅️ Settings', callback_data: 'settings:main' }]
+    ]
+  };
+}
+
+function compactText(s) {
+  const last = s.lastCompactAt
+    ? new Date(s.lastCompactAt).toLocaleString('en-GB')
+    : 'never';
+  return `🗜️ Compact & auto-compact\n` +
+    `context: ${contextLine(s)}\n` +
+    `auto-compact: ${s.autoCompact ? 'ON' : 'OFF'} ` +
+    `(${Math.round(s.autoCompactThreshold * 100)}%)\n` +
+    `last compact: ${last}\n\n` +
+    'Compact now summarizes the conversation. Auto-compact runs after a reply ' +
+    'when context crosses the threshold.';
+}
+
+async function showCompactMenu(chatId, s, editMessageId = null) {
+  await showPanel(chatId, compactText(s), compactMenu(s), editMessageId);
+}
+
 function autoCompactMenu(s) {
   const mark = pct =>
     Math.abs(s.autoCompactThreshold - pct / 100) < 0.001 ? '✅ ' : '';
@@ -1197,7 +1669,8 @@ function autoCompactMenu(s) {
         { text: `${mark(60)}60%`, callback_data: 'ac:t:60' },
         { text: `${mark(75)}75%`, callback_data: 'ac:t:75' },
         { text: `${mark(85)}85%`, callback_data: 'ac:t:85' }
-      ]
+      ],
+      [{ text: '⬅️ Settings', callback_data: 'settings:main' }]
     ]
   };
 }
@@ -1215,57 +1688,33 @@ function autoCompactText(s) {
 }
 
 async function showAutoCompact(chatId, s, editMessageId = null) {
-  const text = autoCompactText(s);
-  const markup = autoCompactMenu(s);
-  if (editMessageId) {
-    try {
-      await api('editMessageText', {
-        chat_id: chatId,
-        message_id: editMessageId,
-        text,
-        reply_markup: markup,
-        disable_web_page_preview: true
-      });
-      return;
-    } catch (_) {}
-  }
-  await send(chatId, text, { reply_markup: markup });
+  await showPanel(chatId, autoCompactText(s), autoCompactMenu(s), editMessageId);
 }
 
 function progressMenu(s) {
   const mark = mode => s.progressMode === mode ? '✅ ' : '';
   return {
     inline_keyboard: [
-      [{ text: `${mark('messages')}💬 Messages`, callback_data: 'progress:messages' }],
-      [{ text: `${mark('stream')}📡 Stream`, callback_data: 'progress:stream' }],
-      [{ text: `${mark('off')}🚫 Off`, callback_data: 'progress:off' }]
+      [{ text: `${mark('full')}🧠🔧 Thinking + tools stream`, callback_data: 'progress:full' }],
+      [{ text: `${mark('messages')}🔧 Tools stream, thinking message`, callback_data: 'progress:messages' }],
+      [{ text: `${mark('stream')}🔧 Tools only stream`, callback_data: 'progress:stream' }],
+      [{ text: `${mark('off')}🚫 Off (final only)`, callback_data: 'progress:off' }],
+      [{ text: '⬅️ Settings', callback_data: 'settings:main' }]
     ]
   };
 }
 
 function progressText(s) {
   return `💬 Progress mode: ${s.progressMode}\n\n` +
-    '• messages — one Telegram message per assistant step and tool action (default)\n' +
-    '• stream — one message edited in place (tool actions only)\n' +
-    '• off — only the final answer';
+    '• full — thinking + tools stream in one message; answer steps separate\n' +
+    '• messages — tools stream in one message; thinking + answer steps separate (default)\n' +
+    '• stream — only tools stream; thinking hidden; answer steps separate\n' +
+    '• off — only the final answer\n\n' +
+    'In full, messages, and stream, answer steps are separate messages.';
 }
 
 async function showProgress(chatId, s, editMessageId = null) {
-  const text = progressText(s);
-  const markup = progressMenu(s);
-  if (editMessageId) {
-    try {
-      await api('editMessageText', {
-        chat_id: chatId,
-        message_id: editMessageId,
-        text,
-        reply_markup: markup,
-        disable_web_page_preview: true
-      });
-      return;
-    } catch (_) {}
-  }
-  await send(chatId, text, { reply_markup: markup });
+  await showPanel(chatId, progressText(s), progressMenu(s), editMessageId);
 }
 
 function checkJsonFile(file) {
@@ -1366,6 +1815,9 @@ async function handleCommand(chatId, text, s) {
     case '/menu':
       return send(chatId, '🎛️ Keyboard menu shown.', { reply_markup: MAIN_KEYBOARD });
 
+    case '/settings':
+      return showSettings(chatId, s);
+
     case '/new':
     case '/clear':
       s.newSession = true;
@@ -1419,6 +1871,9 @@ async function handleCommand(chatId, text, s) {
         { reply_markup: sessionsKeyboard(list) });
     }
 
+    case '/compactmenu':
+      return showCompactMenu(chatId, s);
+
     case '/compact': {
       if (s.newSession && !s.lastSessionId) {
         return send(chatId, 'No active session to compact yet. Send a message first.');
@@ -1457,10 +1912,11 @@ async function handleCommand(chatId, text, s) {
     case '/progress': {
       if (rest) {
         const mode = rest.toLowerCase();
-        if (!['messages', 'stream', 'off'].includes(mode)) {
-          return send(chatId, 'Usage: /progress messages|stream|off');
+        if (!PROGRESS_MODES.includes(mode)) {
+          return send(chatId, 'Usage: /progress full|messages|stream|off');
         }
         s.progressMode = mode;
+        s.progressModeExplicit = true;
         saveState();
         return send(chatId, `💬 Progress mode → ${mode}`);
       }
@@ -1479,6 +1935,7 @@ async function handleCommand(chatId, text, s) {
         `bridge: v${VERSION}\n` +
         `model: ${s.model}\n` +
         `effort: ${s.effort}\n` +
+        `thinking language: ${s.thinkingLanguage}\n` +
         `folder: ${s.cwd}\n` +
         `session mode: ${mode}\n` +
         `last session: ${s.lastSessionId || '-'}\n` +
@@ -1494,16 +1951,14 @@ async function handleCommand(chatId, text, s) {
     }
 
     case '/model':
-      if (!rest) {
-        return send(chatId, `Model: ${s.model}\nChange: /model <name> (e.g. flash, pro, deepseek-v4-flash)`);
-      }
+      if (!rest) return showModel(chatId, s);
       s.model = rest;
       saveState();
       return send(chatId, `🧠 Model → ${s.model}`);
 
     case '/effort':
-      if (!rest) return send(chatId, `Effort: ${s.effort}\nChange: /effort low|medium|high|max`);
-      if (!['low', 'medium', 'high', 'max'].includes(rest.toLowerCase())) {
+      if (!rest) return showEffort(chatId, s);
+      if (!EFFORTS.includes(rest.toLowerCase())) {
         return send(chatId, 'Effort must be low, medium, high, or max.');
       }
       s.effort = rest.toLowerCase();
@@ -1511,19 +1966,14 @@ async function handleCommand(chatId, text, s) {
       return send(chatId, `⚙️ Effort → ${s.effort}`);
 
     case '/cwd': {
-      if (!rest) return send(chatId, `Working directory: ${s.cwd}\nChange: /cwd /absolute/path`);
+      if (!rest) return showCwd(chatId, s);
       const target = path.resolve(rest.replace(/^~(?=$|\/)/, HOME));
       let st;
       try { st = fs.statSync(target); } catch (_) {
         return send(chatId, `Folder not found: ${target}`);
       }
       if (!st.isDirectory()) return send(chatId, `Not a folder: ${target}`);
-      s.cwd = target;
-      s.newSession = true;
-      s.resumeId = null;
-      s.pendingResume = null;
-      resetContext(s);
-      saveState();
+      changeCwd(s, target);
       return send(chatId, `📁 Working directory → ${target}\nA new session will start in this folder.`);
     }
 
@@ -1649,8 +2099,7 @@ async function runJob(job) {
 
     await progress.flush();
     const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
-    const finalAlreadySent = s.progressMode === 'messages' &&
-      progress.getLastTextOk() &&
+    const finalAlreadySent = progress.getLastTextOk() &&
       normalize(text) === normalize(progress.getLastText());
     await progress.finish({ ok: true });
     if (!finalAlreadySent) await sendFormatted(job.chatId, text);
@@ -1704,6 +2153,119 @@ async function handleCallback(cq) {
   const s = sessionFor(chatId);
   const data = cq.data || '';
   try {
+    if (data.startsWith('settings:')) {
+      const panel = data.slice('settings:'.length);
+      await api('answerCallbackQuery', { callback_query_id: cq.id });
+      if (panel === 'model') return showModel(chatId, s, msg.message_id);
+      if (panel === 'effort') return showEffort(chatId, s, msg.message_id);
+      if (panel === 'cwd') return showCwd(chatId, s, msg.message_id);
+      if (panel === 'progress') return showProgress(chatId, s, msg.message_id);
+      if (panel === 'autocompact') return showAutoCompact(chatId, s, msg.message_id);
+      return showSettings(chatId, s, msg.message_id);
+    }
+
+    if (data.startsWith('compact:')) {
+      const action = data.slice('compact:'.length);
+      if (action === 'now') {
+        if (s.newSession && !s.lastSessionId) {
+          await api('answerCallbackQuery', {
+            callback_query_id: cq.id,
+            text: 'No active session to compact yet'
+          });
+          return;
+        }
+        const queued = processing || jobQueue.length > 0;
+        enqueue(chatId, '', 'compact', 'compact');
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: queued ? 'Compact queued' : 'Compacting…'
+        });
+        await send(chatId, queued
+          ? '🗜️ Compact queued. It will run after the current task.'
+          : '🗜️ Compacting context…');
+        return;
+      }
+      if (action === 'auto') {
+        await api('answerCallbackQuery', { callback_query_id: cq.id });
+        await showAutoCompact(chatId, s, msg.message_id);
+        return;
+      }
+      await api('answerCallbackQuery', { callback_query_id: cq.id });
+      return;
+    }
+
+    if (data.startsWith('model:')) {
+      const value = data.slice('model:'.length);
+      if (!value || !modelChoices(s).some(m => m.value === value)) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Unknown model' });
+        return;
+      }
+      if (s.model === value) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Already selected' });
+        return;
+      }
+      s.model = value;
+      saveState();
+      await api('answerCallbackQuery', { callback_query_id: cq.id, text: `🧠 ${value}` });
+      await showModel(chatId, s, msg.message_id);
+      return;
+    }
+
+    if (data.startsWith('effort:')) {
+      const level = data.slice('effort:'.length);
+      if (!EFFORTS.includes(level)) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Invalid effort' });
+        return;
+      }
+      if (s.effort === level) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Already selected' });
+        return;
+      }
+      s.effort = level;
+      saveState();
+      await api('answerCallbackQuery', { callback_query_id: cq.id, text: `⚙️ Effort: ${level}` });
+      await showEffort(chatId, s, msg.message_id);
+      return;
+    }
+
+    if (data.startsWith('cwd:')) {
+      const [, token, rawIndex] = data.split(':');
+      const index = Number(rawIndex);
+      const entry = s.cwdMenus[token];
+      const target = entry && Array.isArray(entry.options) && Number.isInteger(index)
+        ? entry.options[index]
+        : null;
+      if (!target) {
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: 'Folder list expired. Use /cwd again.'
+        });
+        return;
+      }
+      let st;
+      try { st = fs.statSync(target); } catch (_) {
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: 'Folder no longer exists'
+        });
+        return;
+      }
+      if (!st.isDirectory()) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Not a folder' });
+        return;
+      }
+      changeCwd(s, target);
+      await api('answerCallbackQuery', {
+        callback_query_id: cq.id,
+        text: `📁 ${displayCwd(target)}`
+      });
+      await removeInline(chatId, msg.message_id);
+      await send(chatId,
+        `📁 Working directory → ${target}\nA new session will start in this folder.`,
+        { reply_markup: MAIN_KEYBOARD });
+      return;
+    }
+
     if (data.startsWith('ac:')) {
       const action = data.slice(3);
       if (action === 'on' || action === 'off') {
@@ -1750,7 +2312,7 @@ async function handleCallback(cq) {
 
     if (data.startsWith('progress:')) {
       const mode = data.slice('progress:'.length);
-      if (!['messages', 'stream', 'off'].includes(mode)) {
+      if (!PROGRESS_MODES.includes(mode)) {
         await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Invalid mode' });
         return;
       }
@@ -1759,6 +2321,7 @@ async function handleCallback(cq) {
         return;
       }
       s.progressMode = mode;
+      s.progressModeExplicit = true;
       saveState();
       await api('answerCallbackQuery', { callback_query_id: cq.id, text: `Progress mode: ${mode}` });
       await showProgress(chatId, s, msg.message_id);
@@ -1992,7 +2555,8 @@ process.on('unhandledRejection', e => log('unhandled rejection:', e));
     log(`bridge v${VERSION} started as @${me.username} (pid ${process.pid})`);
     await syncCommands();
     await send([...allowedChatIds][0],
-      `🤖 Zero bridge v${VERSION} online (@${me.username}). Send a message or /help.`);
+      `🤖 Zero bridge v${VERSION} online (@${me.username}). Send a message or /help.`,
+      { reply_markup: MAIN_KEYBOARD });
   } catch (e) {
     log('startup check failed:', e.message);
   }
