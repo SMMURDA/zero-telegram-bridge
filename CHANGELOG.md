@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.3] - 2026-10-24
+
+### Changed
+
+- The release workflow now uses the matching `CHANGELOG.md` section as the
+  GitHub release body, appending a compare link to the previous tag.
+  Auto-generated notes remain the fallback when no section exists.
+
 ## [0.4.2] - 2026-10-24
 
 ### Added
@@ -91,7 +99,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.3.0...v0.4.0

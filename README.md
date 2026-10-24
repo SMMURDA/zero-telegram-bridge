@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.3-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.

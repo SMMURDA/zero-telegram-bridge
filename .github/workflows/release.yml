@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build source archive
         run: |
@@ -22,11 +24,35 @@ jobs:
             -o "zero-telegram-bridge-${GITHUB_REF_NAME}.zip" \
             HEAD
 
+      - name: Build release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { flag=1; next }
+            /^## \[/ && flag { exit }
+            flag { print }
+          ' CHANGELOG.md > release-notes.md
+
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          {
+            cat release-notes.md
+            if [ -n "$PREV" ]; then
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_REF_NAME}"
+            fi
+          } > release-body.md
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "zero-telegram-bridge-${GITHUB_REF_NAME}.zip" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
+          ASSET="zero-telegram-bridge-${GITHUB_REF_NAME}.zip"
+          if [ -s release-body.md ]; then
+            gh release create "$GITHUB_REF_NAME" "$ASSET" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release-body.md
+          else
+            gh release create "$GITHUB_REF_NAME" "$ASSET" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
