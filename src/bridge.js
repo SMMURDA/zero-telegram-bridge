@@ -159,7 +159,7 @@ const BOT_COMMANDS = [
   { command: 'effort', description: '⚙️ View or set effort' },
   { command: 'cwd', description: '📁 Working directory' },
   { command: 'cost', description: '💰 Session & total cost' },
-  { command: 'stop', description: '⏹️ Stop running task' },
+  { command: 'stop', description: '⏹️ Interrupt running task' },
   { command: 'ping', description: '🏓 Check bridge health' },
   { command: 'id', description: '🪪 Show chat ID' },
   { command: 'mcp', description: '🔌 Zero MCP servers' },
@@ -203,7 +203,7 @@ const HELP = `📖 ZERO HELP
 /sessions — recent sessions
 /compact [instructions] — summarize and free context
 /status — model, effort, folder, queue, cost, context
-/stop — stop the running task and clear the queue
+/stop — interrupt the running task (SIGINT) and clear the queue
 
 🧠 Settings
 /model [name] — view or set model
@@ -575,6 +575,29 @@ function killTree(child, signal = 'SIGTERM') {
   catch (_) { try { child.kill(signal); } catch (_) {} }
 }
 
+function processAlive(child) {
+  return Boolean(child) && child.exitCode === null && child.signalCode === null;
+}
+
+// ESC/Ctrl+C-like stop: SIGINT first, then escalate if the child ignores it.
+function requestStop(job) {
+  if (!job) return;
+  if (job.control) job.control.stop = true;
+  killTree(job.child, 'SIGINT');
+
+  const timers = [];
+  timers.push(setTimeout(() => {
+    if (processAlive(job.child)) killTree(job.child, 'SIGTERM');
+  }, 2000));
+  timers.push(setTimeout(() => {
+    if (processAlive(job.child)) killTree(job.child, 'SIGKILL');
+  }, 5000));
+
+  if (job.child) {
+    job.child.once('close', () => timers.forEach(clearTimeout));
+  }
+}
+
 function zeroArgs(prompt, s, stream = true) {
   const args = ['-p', '--output-format', stream ? 'stream-json' : 'json'];
   if (stream) args.push('--verbose');
@@ -664,7 +687,10 @@ function runZero(prompt, s, onChild, control) {
     const timeout = setTimeout(() => {
       killedBy = 'timeout';
       killTree(child, 'SIGTERM');
-      setTimeout(() => killTree(child, 'SIGKILL'), 5000);
+      const killTimer = setTimeout(() => {
+        if (processAlive(child)) killTree(child, 'SIGKILL');
+      }, 5000);
+      child.once('close', () => clearTimeout(killTimer));
     }, config.jobTimeoutMs);
 
     child.on('error', err => { clearTimeout(timeout); reject(err); });
@@ -1224,13 +1250,12 @@ async function handleCommand(chatId, text, s) {
           ? `⏹️ Queue cleared (${queued} job${queued === 1 ? '' : 's'}).`
           : 'No task is running.');
       }
-      if (activeJob.control) activeJob.control.stop = true;
-      killTree(activeJob.child, 'SIGTERM');
-      const dying = activeJob;
-      setTimeout(() => killTree(dying && dying.child, 'SIGKILL'), 5000);
+      requestStop(activeJob);
       const queued = jobQueue.length;
       jobQueue = [];
-      return send(chatId, `⏹️ Task stopped${queued ? `, ${queued} queued job${queued === 1 ? '' : 's'} cleared` : ''}.`);
+      return send(chatId,
+        `⏹️ Interrupting${queued ? ` and clearing ${queued} queued job${queued === 1 ? '' : 's'}` : ''}. ` +
+        'You can send your next message now.');
     }
 
     case '/ping':

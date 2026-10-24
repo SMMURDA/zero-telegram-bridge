@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.2-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -16,6 +16,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - 💬 **Two-way chat** — send a message, get the agent's reply, keep the context.
 - 🆕 **Session continuity** — `-c` between messages, `/new` to reset, `/resume` to pick an older session.
 - 🗜️ **Compaction** — manual `/compact [instructions]`, plus per-chat auto-compact with a confirmation UI and configurable threshold.
+- ⏹️ **ESC-like stop** — `/stop` sends `SIGINT` first, then escalates, so you can give the agent a new direction immediately.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
 - 🧠 **Per-chat settings** — model, effort, and working directory independent of any terminal session.
 - 📡 **Live progress** — one Telegram message updates in place as the agent runs Bash, edits files, reads, searches, and fetches.
@@ -155,7 +156,7 @@ Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in 
 | `/effort [level]` | View or set effort |
 | `/cwd [path]` | View or set the working directory |
 | `/cost` | Session and lifetime cost |
-| `/stop` | Kill the running task and clear the queue |
+| `/stop` | Interrupt the running task (SIGINT, then escalate) and clear the queue |
 | `/ping` | Liveness check |
 | `/id` | Print the current chat ID |
 | `/mcp [args]` | Proxy to `zero mcp` |
@@ -248,7 +249,7 @@ Compaction jobs use `--output-format json`.
 - The child is spawned **detached**: Zero's sandbox may terminate its own process group on exit, and a non-detached child would take the bridge down with it.
 - `getUpdates` uses a 25-second long-poll, below the idle cutoff of common proxies and container network sandboxes.
 - Each HTTP request opens a fresh connection (`https` + `agent: false`) so stale keep-alive sockets cannot stall polling.
-- Jobs run serially per bridge. `/stop` sends `SIGTERM` to the child's process group, then `SIGKILL` after 5 seconds.
+- Jobs run serially per bridge. `/stop` behaves like ESC/Ctrl+C: it sends `SIGINT` to the child's process group, escalates to `SIGTERM` after 2 seconds, then `SIGKILL` after 5 seconds. The queue is cleared and you can send the next message immediately; Zero resumes from the last saved session state.
 
 ## Running as a service
 

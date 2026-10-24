@@ -6,10 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
 > Releases v0.1.0–v0.4.1 were tagged retroactively from the project's commit
-> history. Internal release tooling added after v0.4.1 is listed under
-> Unreleased and is not a published bridge release.
+> history.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [0.4.2] - 2026-10-24
 
 ### Added
 
@@ -18,10 +21,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `/stop` now interrupts like ESC/Ctrl+C: `SIGINT` first, then `SIGTERM` after
+  2 seconds, then `SIGKILL` after 5 seconds. The queue is cleared and the next
+  message can be sent immediately; the bridge resumes from the last saved
+  session state.
 - The release workflow uses the matching `CHANGELOG.md` section as the GitHub
   release body, appending a compare link to the previous tag. Auto-generated
   notes remain the fallback when no section exists.
 - The versioning and release process is documented in the README.
+
+### Fixed
+
+- Stop and timeout escalation timers are cleared when the child exits, so a
+  reused PID cannot receive stray signals.
 
 ## [0.4.1] - 2026-10-24
 
@@ -91,7 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.2.0...v0.3.0
