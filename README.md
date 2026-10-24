@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.3-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.4-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -163,7 +163,7 @@ Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in 
 | `/mcp [args]` | Proxy to `zero mcp` |
 | `/plugin [args]` | Proxy to `zero plugin` |
 | `/agents` | Proxy to `zero agents` |
-| `/doctor` | Proxy to `zero doctor` |
+| `/doctor` | Non-interactive health summary (the full `zero doctor` UI needs a terminal) |
 | `/version` | Bridge version and Zero CLI version |
 | `/config` | Bridge config with the token redacted |
 
@@ -239,6 +239,10 @@ Agent replies are converted from Markdown to Telegram HTML before sending:
 - Links, headings, blockquotes, bullet lists, and horizontal rules
 
 If Telegram rejects the entities, the bridge falls back to sending the raw text so the answer is never lost. The converter lives in `src/markdown.js` and is covered by `npm test` (also run in CI).
+
+### Health check
+
+`/doctor` returns a non-interactive summary of the bridge, Zero CLI, config files, agents, MCP servers, disk space, session state, and recent log issues. The full `zero doctor` command is an interactive Ink UI that requires a TTY, so it is intended for your terminal and is not invoked by the bot.
 
 ## How it works
 

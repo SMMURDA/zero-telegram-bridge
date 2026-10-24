@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.4] - 2026-10-24
+
+### Fixed
+
+- `/doctor` no longer runs the interactive Ink UI inside the bot, which failed
+  with `Raw mode is not supported on the current process.stdin`. It now returns
+  a non-interactive health summary: bridge/Zero/Node versions, config file
+  validity, agents, MCP servers, disk space, session state, and recent log
+  issues.
+
+### Changed
+
+- The full `zero doctor` command remains terminal-only; the bot documentation
+  explains the difference.
+
 ## [0.4.3] - 2026-10-24
 
 ### Added
@@ -119,7 +134,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.0...v0.4.1

@@ -166,7 +166,7 @@ const BOT_COMMANDS = [
   { command: 'mcp', description: '🔌 Zero MCP servers' },
   { command: 'plugin', description: '🧩 Zero plugins' },
   { command: 'agents', description: '🤖 List agents' },
-  { command: 'doctor', description: '🩺 Zero health check' },
+  { command: 'doctor', description: '🩺 Non-interactive health check' },
   { command: 'version', description: '🏷️ Bridge & Zero CLI version' },
   { command: 'config', description: '🔧 Bridge configuration' }
 ];
@@ -220,7 +220,7 @@ const HELP = `📖 ZERO HELP
 /mcp [subcommand] — manage MCP servers
 /plugin [subcommand] — manage plugins
 /agents — list agents
-/doctor — Zero CLI health check
+/doctor — non-interactive health check (full doctor needs a terminal)
 /version — bridge and Zero CLI versions
 /config — bridge config (token redacted)
 
@@ -1111,6 +1111,88 @@ async function showAutoCompact(chatId, s, editMessageId = null) {
   await send(chatId, text, { reply_markup: markup });
 }
 
+function checkJsonFile(file) {
+  try {
+    JSON.parse(fs.readFileSync(file, 'utf8'));
+    return '✅ OK';
+  } catch (e) {
+    return e.code === 'ENOENT' ? '— not present' : `❌ ${e.message}`;
+  }
+}
+
+function recentLogIssues() {
+  try {
+    const lines = fs.readFileSync(LOG_PATH, 'utf8').trim().split('\n').slice(-300);
+    const bad = lines.filter(line => /error|failed|ETIMEDOUT|409 Conflict/i.test(line));
+    return { count: bad.length, last: bad.length ? bad[bad.length - 1] : '' };
+  } catch (_) {
+    return { count: 0, last: '' };
+  }
+}
+
+function diskInfo() {
+  try {
+    const st = fs.statfsSync(RUNTIME_DIR);
+    const free = st.bavail * st.bsize;
+    const total = st.blocks * st.bsize;
+    return `${(free / 1e9).toFixed(1)} GB free / ${(total / 1e9).toFixed(1)} GB`;
+  } catch (_) {
+    return 'unknown';
+  }
+}
+
+async function bridgeDoctor(s) {
+  const [zeroVersion, mcpOut, agentsOut] = await Promise.all([
+    runCli(['--version'], { timeout: 20000 }).catch(e => `error: ${e.message}`),
+    runCli(['mcp', 'list'], { timeout: 30000 }).catch(e => `error: ${e.message}`),
+    runCli(['agents'], { timeout: 20000 }).catch(e => `error: ${e.message}`)
+  ]);
+
+  const firstLine = text => String(text || '').trim().split('\n')[0] || '(no output)';
+  const mode = s.resumeId
+    ? `resume ${s.resumeId}`
+    : (s.newSession ? 'new (next)' : 'continue (-c)');
+  const issues = recentLogIssues();
+  const lastIssue = issues.last
+    ? `\n• last: \`${oneLine(issues.last, 150).replace(/`/g, "'")}\``
+    : '';
+
+  return [
+    '🩺 **Health check**',
+    '',
+    '**Bridge**',
+    `• version: \`v${VERSION}\``,
+    `• uptime: ${fmtDuration(Date.now() - startedAt)}`,
+    `• pid: \`${process.pid}\``,
+    `• workdir: \`${s.cwd}\``,
+    `• mode: ${mode}`,
+    '',
+    '**Zero CLI**',
+    `• version: \`${firstLine(zeroVersion)}\``,
+    `• binary: \`${config.zeroBin}\``,
+    `• node: \`${process.version}\``,
+    `• agents: ${firstLine(agentsOut)}`,
+    `• MCP: ${oneLine(mcpOut, 200) || '(no output)'}`,
+    '',
+    '**Config**',
+    `• \`~/.zero/settings.json\`: ${checkJsonFile(path.join(HOME, '.zero', 'settings.json'))}`,
+    `• \`~/.zero/config.json\`: ${checkJsonFile(path.join(HOME, '.zero', 'config.json'))}`,
+    `• bot token: ${config.token ? 'configured ✅' : 'missing ❌'}`,
+    `• allowed chats: ${allowedChatIds.size}`,
+    '',
+    '**Session**',
+    `• model: \`${s.model}\` (${s.effort})`,
+    `• auto-compact: ${s.autoCompact ? 'ON' : 'OFF'} (${Math.round(s.autoCompactThreshold * 100)}%)`,
+    `• context: ${contextLine(s)}`,
+    '',
+    '**Runtime**',
+    `• disk: ${diskInfo()}`,
+    `• log issues (last 300 lines): ${issues.count}${lastIssue}`,
+    '',
+    'ℹ️ Full `zero doctor` is an interactive terminal UI. Run it in a terminal for the complete report.'
+  ].join('\n');
+}
+
 async function handleCommand(chatId, text, s) {
   const parts = text.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -1297,7 +1379,7 @@ async function handleCommand(chatId, text, s) {
       return send(chatId, await runCli(['agents']));
 
     case '/doctor':
-      return send(chatId, await runCli(['doctor'], { timeout: 120000 }));
+      return sendFormatted(chatId, await bridgeDoctor(s));
 
     case '/version': {
       const zeroVersion = await runCli(['--version']);
