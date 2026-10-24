@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.5.0] - 2026-10-24
+
+### Added
+
+- `/progress` with three modes: `messages` (default), `stream`, and `off`.
+- Messages mode posts assistant text between tool calls and each tool action as
+  a separate Telegram message, in order.
+- Assistant text extraction from `stream-json`, with per-message deduplication
+  and a small send throttle.
+
+### Changed
+
+- The default progress mode is `messages`. `stream` keeps the single edited
+  message with tool actions.
+
 ## [0.4.9] - 2026-10-24
 
 ### Fixed
@@ -207,7 +222,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.9...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.9...v0.5.0
 [0.4.9]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.6...v0.4.7

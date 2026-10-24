@@ -79,10 +79,14 @@ const config = {
   autoCompact: process.env.ZERO_BRIDGE_AUTO_COMPACT === '1' || Boolean(fileConfig.autoCompact),
   autoCompactThreshold: Number(
     process.env.ZERO_BRIDGE_AUTO_COMPACT_THRESHOLD || fileConfig.autoCompactThreshold || 0.75
-  )
+  ),
+  progressMode: process.env.ZERO_BRIDGE_PROGRESS_MODE || fileConfig.progressMode || 'messages'
 };
 if (!(config.autoCompactThreshold > 0.1 && config.autoCompactThreshold < 0.98)) {
   config.autoCompactThreshold = 0.75;
+}
+if (!['messages', 'stream', 'off'].includes(config.progressMode)) {
+  config.progressMode = 'messages';
 }
 
 if (!config.token) {
@@ -167,6 +171,7 @@ const BOT_COMMANDS = [
   { command: 'sessions', description: '🗂️ Recent sessions' },
   { command: 'compact', description: '🗜️ Compact context' },
   { command: 'autocompact', description: '🔄 Toggle auto-compact' },
+  { command: 'progress', description: '💬 Progress display mode' },
   { command: 'status', description: '📊 Bridge status & queue' },
   { command: 'model', description: '🧠 View or set model' },
   { command: 'effort', description: '⚙️ View or set effort' },
@@ -224,6 +229,7 @@ const HELP = `📖 ZERO HELP
 /cwd [path] — view or set working directory
 /cost — session and total cost
 /autocompact — toggle auto-compact (with confirmation)
+/progress — progress display: messages / stream / off
 /menu — show the keyboard
 /id — your chat ID
 /ping — check bridge health
@@ -285,6 +291,7 @@ function sessionFor(chatId) {
       lastCallCost: 0,
       autoCompact: config.autoCompact,
       autoCompactThreshold: config.autoCompactThreshold,
+      progressMode: config.progressMode,
       lastContextTokens: 0,
       contextWindow: null,
       contextPct: 0,
@@ -300,6 +307,7 @@ function sessionFor(chatId) {
   if (!s.effort) s.effort = config.effort;
   if (typeof s.autoCompact !== 'boolean') s.autoCompact = config.autoCompact;
   if (typeof s.autoCompactThreshold !== 'number') s.autoCompactThreshold = config.autoCompactThreshold;
+  if (!['messages', 'stream', 'off'].includes(s.progressMode)) s.progressMode = config.progressMode;
   if (typeof s.lastContextTokens !== 'number') s.lastContextTokens = 0;
   if (typeof s.contextPct !== 'number') s.contextPct = 0;
   if (!s.contextSource) s.contextSource = 'bot';
@@ -507,7 +515,7 @@ function formatToolUse(name, input) {
 
 // One Telegram message per job, edited as tools run. The message is created
 // lazily on the first tool call, so simple replies do not leave clutter.
-function createProgress(chatId) {
+function createStreamProgress(chatId) {
   const started = Date.now();
   let msg = null;
   let ensurePromise = null;
@@ -571,12 +579,17 @@ function createProgress(chatId) {
   };
 
   return {
+    addText() {},
     addTool(name, input) {
       if (closed) return;
       total++;
       lines.push(`[${elapsed()}s] ${formatToolUse(name, input)}`);
       if (lines.length > 14) lines = lines.slice(-14);
       ensure().then(ok => { if (ok) schedule(); });
+    },
+    async flush() {
+      await ensurePromise;
+      await chain;
     },
     async finish(opts = {}) {
       if (closed) return;
@@ -605,6 +618,81 @@ function createProgress(chatId) {
       await edit(text);
     }
   };
+}
+
+// One Telegram message per assistant step and tool action, in order.
+function createMessageProgress(chatId) {
+  let chain = Promise.resolve();
+  let lastSend = 0;
+  let accepting = true;
+  let lastText = '';
+  let lastTextOk = false;
+  const seen = new Set();
+
+  const queue = task => {
+    if (!accepting) return;
+    chain = chain.then(async () => {
+      const wait = Math.max(0, 350 - (Date.now() - lastSend));
+      if (wait) await sleep(wait);
+      await task();
+      lastSend = Date.now();
+    }).catch(e => log('progress step failed:', e.message));
+    return chain;
+  };
+
+  return {
+    addText(text, key) {
+      if (!accepting) return;
+      const body = String(text || '').trim();
+      if (!body) return;
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
+      lastText = body;
+      lastTextOk = false;
+      queue(async () => {
+        await sendFormatted(chatId, `💬\n\n${body}`);
+        lastTextOk = true;
+      });
+    },
+    addTool(name, input, key) {
+      if (!accepting) return;
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
+      // A tool after text means the earlier text was not the final answer.
+      lastText = '';
+      lastTextOk = false;
+      queue(() => sendFormatted(chatId, formatToolUse(name, input)));
+    },
+    getLastText() { return lastText; },
+    getLastTextOk() { return lastTextOk; },
+    async flush() {
+      await chain;
+    },
+    async finish() {
+      accepting = false;
+      await chain;
+    }
+  };
+}
+
+function createProgress(chatId, mode = 'messages') {
+  if (mode === 'off') {
+    return {
+      addText() {},
+      addTool() {},
+      getLastText() { return ''; },
+      getLastTextOk() { return false; },
+      async flush() {},
+      async finish() {}
+    };
+  }
+  if (mode === 'stream') {
+    return Object.assign(createStreamProgress(chatId), {
+      getLastText() { return ''; },
+      getLastTextOk() { return false; }
+    });
+  }
+  return createMessageProgress(chatId);
 }
 
 // ------------------------------------------------------------------- Zero CLI
@@ -693,11 +781,12 @@ function runZero(prompt, s, onChild, control) {
     const seenTools = new Set();
     const limit = 32 * 1024 * 1024;
 
-    const emitTool = block => {
+    const emitTool = (block, key) => {
       if (!progress || !block || block.type !== 'tool_use') return;
-      if (block.id && seenTools.has(block.id)) return;
-      if (block.id) seenTools.add(block.id);
-      progress.addTool(block.name, block.input || {});
+      const dedupeKey = key || (block.id ? `id:${block.id}` : '');
+      if (dedupeKey && seenTools.has(dedupeKey)) return;
+      if (dedupeKey) seenTools.add(dedupeKey);
+      progress.addTool(block.name, block.input || {}, dedupeKey);
     };
 
     const handleLine = raw => {
@@ -705,11 +794,26 @@ function runZero(prompt, s, onChild, control) {
       if (!line.startsWith('{')) return;
       let evt;
       try { evt = JSON.parse(line); } catch (_) { return; }
+
       if (evt.type === 'assistant' && evt.message && Array.isArray(evt.message.content)) {
-        for (const block of evt.message.content) emitTool(block);
+        const content = evt.message.content;
+        const messageId = evt.message.id || evt.message.uuid || 'msg';
+
+        content.forEach((block, index) => {
+          if (!block) return;
+          if (block.type === 'text' &&
+            typeof block.text === 'string' && block.text.trim()) {
+            progress.addText(block.text, `text:${messageId}:${index}`);
+          } else if (block.type === 'tool_use') {
+            emitTool(block, `tool:${messageId}:${index}:${block.id || ''}`);
+          }
+        });
       } else if (evt.type === 'stream_event' &&
         evt.event && evt.event.type === 'content_block_start') {
-        emitTool(evt.event.content_block);
+        const block = evt.event.content_block;
+        emitTool(block, block && block.id
+          ? `stream:${block.id}`
+          : `stream:${evt.event.index}`);
       }
     };
 
@@ -1128,6 +1232,42 @@ async function showAutoCompact(chatId, s, editMessageId = null) {
   await send(chatId, text, { reply_markup: markup });
 }
 
+function progressMenu(s) {
+  const mark = mode => s.progressMode === mode ? '✅ ' : '';
+  return {
+    inline_keyboard: [
+      [{ text: `${mark('messages')}💬 Messages`, callback_data: 'progress:messages' }],
+      [{ text: `${mark('stream')}📡 Stream`, callback_data: 'progress:stream' }],
+      [{ text: `${mark('off')}🚫 Off`, callback_data: 'progress:off' }]
+    ]
+  };
+}
+
+function progressText(s) {
+  return `💬 Progress mode: ${s.progressMode}\n\n` +
+    '• messages — one Telegram message per assistant step and tool action (default)\n' +
+    '• stream — one message edited in place (tool actions only)\n' +
+    '• off — only the final answer';
+}
+
+async function showProgress(chatId, s, editMessageId = null) {
+  const text = progressText(s);
+  const markup = progressMenu(s);
+  if (editMessageId) {
+    try {
+      await api('editMessageText', {
+        chat_id: chatId,
+        message_id: editMessageId,
+        text,
+        reply_markup: markup,
+        disable_web_page_preview: true
+      });
+      return;
+    } catch (_) {}
+  }
+  await send(chatId, text, { reply_markup: markup });
+}
+
 function checkJsonFile(file) {
   try {
     JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -1314,6 +1454,19 @@ async function handleCommand(chatId, text, s) {
       return showAutoCompact(chatId, s);
     }
 
+    case '/progress': {
+      if (rest) {
+        const mode = rest.toLowerCase();
+        if (!['messages', 'stream', 'off'].includes(mode)) {
+          return send(chatId, 'Usage: /progress messages|stream|off');
+        }
+        s.progressMode = mode;
+        saveState();
+        return send(chatId, `💬 Progress mode → ${mode}`);
+      }
+      return showProgress(chatId, s);
+    }
+
     case '/status': {
       const running = activeJob
         ? `yes (${fmtDuration(Date.now() - activeJob.startedAt)})`
@@ -1473,7 +1626,7 @@ async function runJob(job) {
       return;
     }
 
-    progress = createProgress(job.chatId);
+    progress = createProgress(job.chatId, s.progressMode);
     const control = { stop: false, progress };
     const result = await new Promise((resolve, reject) => {
       runZero(job.prompt, s, child => {
@@ -1494,8 +1647,13 @@ async function runJob(job) {
       : 0;
     if (denied) text += `\n\n⚠️ ${denied} tool call${denied === 1 ? '' : 's'} denied by the permission system.`;
 
+    await progress.flush();
+    const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+    const finalAlreadySent = s.progressMode === 'messages' &&
+      progress.getLastTextOk() &&
+      normalize(text) === normalize(progress.getLastText());
     await progress.finish({ ok: true });
-    await sendFormatted(job.chatId, text);
+    if (!finalAlreadySent) await sendFormatted(job.chatId, text);
     await maybeAutoCompact(job.chatId, s);
   } catch (e) {
     if (progress) {
@@ -1587,6 +1745,23 @@ async function handleCallback(cq) {
         return;
       }
       await showAutoCompact(chatId, s, msg.message_id);
+      return;
+    }
+
+    if (data.startsWith('progress:')) {
+      const mode = data.slice('progress:'.length);
+      if (!['messages', 'stream', 'off'].includes(mode)) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Invalid mode' });
+        return;
+      }
+      if (s.progressMode === mode) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: `Already ${mode}` });
+        return;
+      }
+      s.progressMode = mode;
+      saveState();
+      await api('answerCallbackQuery', { callback_query_id: cq.id, text: `Progress mode: ${mode}` });
+      await showProgress(chatId, s, msg.message_id);
       return;
     }
 

@@ -8,5 +8,6 @@
   "jobTimeoutMs": 1800000,
   "maxFileBytes": 20971520,
   "autoCompact": false,
-  "autoCompactThreshold": 0.75
+  "autoCompactThreshold": 0.75,
+  "progressMode": "messages"
 }
