@@ -63,8 +63,15 @@ const config = {
   model: process.env.ZERO_MODEL || fileConfig.model || 'flash',
   effort: process.env.ZERO_EFFORT || fileConfig.effort || 'low',
   jobTimeoutMs: Number(process.env.ZERO_JOB_TIMEOUT_MS || fileConfig.jobTimeoutMs || 1800000),
-  maxFileBytes: Number(process.env.ZERO_MAX_FILE_BYTES || fileConfig.maxFileBytes || 20971520)
+  maxFileBytes: Number(process.env.ZERO_MAX_FILE_BYTES || fileConfig.maxFileBytes || 20971520),
+  autoCompact: process.env.ZERO_BRIDGE_AUTO_COMPACT === '1' || Boolean(fileConfig.autoCompact),
+  autoCompactThreshold: Number(
+    process.env.ZERO_BRIDGE_AUTO_COMPACT_THRESHOLD || fileConfig.autoCompactThreshold || 0.75
+  )
 };
+if (!(config.autoCompactThreshold > 0.1 && config.autoCompactThreshold < 0.98)) {
+  config.autoCompactThreshold = 0.75;
+}
 
 if (!config.token) {
   console.error(
@@ -101,6 +108,8 @@ const KB = {
   status: '📊 Status',
   cost: '💰 Cost',
   stop: '⏹️ Stop',
+  compact: '🗜️ Compact',
+  autoCompact: '🔄 Auto-Compact',
   help: '❓ Help'
 };
 
@@ -109,7 +118,7 @@ const MAIN_KEYBOARD = {
     [{ text: KB.newSession }, { text: KB.sessions }, { text: KB.resume }],
     [{ text: KB.model }, { text: KB.effort }, { text: KB.cwd }],
     [{ text: KB.status }, { text: KB.cost }, { text: KB.stop }],
-    [{ text: KB.help }]
+    [{ text: KB.compact }, { text: KB.autoCompact }, { text: KB.help }]
   ],
   resize_keyboard: true,
   is_persistent: true,
@@ -126,6 +135,8 @@ const KEYBOARD_MAP = {
   [KB.status]: '/status',
   [KB.cost]: '/cost',
   [KB.stop]: '/stop',
+  [KB.compact]: '/compact',
+  [KB.autoCompact]: '/autocompact',
   [KB.help]: '/help'
 };
 
@@ -136,6 +147,8 @@ const BOT_COMMANDS = [
   { command: 'new', description: '🆕 New conversation' },
   { command: 'resume', description: '⏪ Resume a session' },
   { command: 'sessions', description: '🗂️ Recent sessions' },
+  { command: 'compact', description: '🗜️ Compact context' },
+  { command: 'autocompact', description: '🔄 Toggle auto-compact' },
   { command: 'status', description: '📊 Bridge status & queue' },
   { command: 'model', description: '🧠 View or set model' },
   { command: 'effort', description: '⚙️ View or set effort' },
@@ -165,7 +178,7 @@ I'm your Zero agent on Telegram. I can chat, read and write files, run commands,
 🚀 Quick start
 • /new — start a new conversation
 • /status — check bridge status
-• /stop — stop a running task
+• /compact — summarize and free context
 • /model — switch models
 
 🔒 Full-auto mode. Only your chat ID is served.`;
@@ -183,7 +196,8 @@ const HELP = `📖 ZERO HELP
 /resume — list sessions in the working directory
 /resume <number|id> — resume a specific session
 /sessions — recent sessions
-/status — model, effort, folder, queue, cost
+/compact [instructions] — summarize and free context
+/status — model, effort, folder, queue, cost, context
 /stop — stop the running task and clear the queue
 
 🧠 Settings
@@ -191,6 +205,7 @@ const HELP = `📖 ZERO HELP
 /effort [low|medium|high|max] — set effort
 /cwd [path] — view or set working directory
 /cost — session and total cost
+/autocompact — toggle auto-compact (with confirmation)
 /menu — show the keyboard
 /id — your chat ID
 /ping — check bridge health
@@ -249,13 +264,25 @@ function sessionFor(chatId) {
       lastSessionId: null,
       lastTotal: 0,
       spent: 0,
-      lastCallCost: 0
+      lastCallCost: 0,
+      autoCompact: config.autoCompact,
+      autoCompactThreshold: config.autoCompactThreshold,
+      lastContextTokens: 0,
+      contextWindow: null,
+      contextPct: 0,
+      lastCompactAt: null,
+      autoCompactFailedAt: 0
     };
   }
   const s = state.sessions[id];
   if (!s.cwd) s.cwd = config.workdir;
   if (!s.model) s.model = config.model;
   if (!s.effort) s.effort = config.effort;
+  if (typeof s.autoCompact !== 'boolean') s.autoCompact = config.autoCompact;
+  if (typeof s.autoCompactThreshold !== 'number') s.autoCompactThreshold = config.autoCompactThreshold;
+  if (typeof s.lastContextTokens !== 'number') s.lastContextTokens = 0;
+  if (typeof s.contextPct !== 'number') s.contextPct = 0;
+  if (typeof s.autoCompactFailedAt !== 'number') s.autoCompactFailedAt = 0;
   return s;
 }
 
@@ -426,7 +453,13 @@ function runZero(prompt, s, onChild, control) {
 
     const child = spawn(config.zeroBin, args, {
       cwd: s.cwd,
-      env: { ...process.env, HOME, NO_COLOR: '1' },
+      env: {
+        ...process.env,
+        HOME,
+        NO_COLOR: '1',
+        // The bridge owns auto-compaction so the Telegram toggle is authoritative.
+        DISABLE_AUTO_COMPACT: '1'
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       // Own process group: Zero's sandbox can kill its own group on exit
       // without taking this bridge down with it.
@@ -535,6 +568,95 @@ function updateCost(s, parsed) {
   s.lastTotal = total;
   s.lastCallCost = delta;
   s.spent = (s.spent || 0) + delta;
+}
+
+function updateUsage(s, parsed) {
+  if (!parsed) return;
+  const u = parsed.usage || {};
+  const tokens =
+    (u.input_tokens || 0) +
+    (u.cache_read_input_tokens || 0) +
+    (u.cache_creation_input_tokens || 0) +
+    (u.output_tokens || 0);
+
+  if (tokens > 0) s.lastContextTokens = tokens;
+
+  const modelUsage = parsed.modelUsage || {};
+  let window = 0;
+  for (const entry of Object.values(modelUsage)) {
+    if (entry && typeof entry.contextWindow === 'number') {
+      window = Math.max(window, entry.contextWindow);
+    }
+  }
+  if (window) s.contextWindow = window;
+  s.contextPct = s.contextWindow
+    ? Math.min(1, s.lastContextTokens / s.contextWindow)
+    : 0;
+}
+
+function fmtTokens(n) {
+  n = Number(n) || 0;
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return String(n);
+}
+
+function contextLine(s) {
+  if (!s.lastContextTokens) {
+    if (s.lastCompactAt) {
+      const t = new Date(s.lastCompactAt).toLocaleTimeString('en-GB', {
+        hour: '2-digit', minute: '2-digit'
+      });
+      return `compacted at ${t}`;
+    }
+    return 'unknown (send a message first)';
+  }
+  const pct = s.contextWindow ? ` (${(s.contextPct * 100).toFixed(1)}%)` : '';
+  const window = s.contextWindow ? ` / ${fmtTokens(s.contextWindow)}` : '';
+  return `${fmtTokens(s.lastContextTokens)}${window}${pct}`;
+}
+
+async function runCompact(chatId, s, instructions = '') {
+  const prompt = instructions ? `/compact ${instructions}` : '/compact';
+  log('compact', JSON.stringify({ chatId, instructions: instructions.slice(0, 200) }));
+
+  const control = { stop: false };
+  const result = await new Promise((resolve, reject) => {
+    runZero(prompt, s, child => {
+      activeJob = { child, control, chatId, startedAt: Date.now() };
+    }, control).then(resolve, reject);
+  });
+
+  updateCost(s, result.parsed);
+  s.lastContextTokens = 0;
+  s.contextPct = 0;
+  s.resumeId = null;
+  s.newSession = false;
+  s.lastCompactAt = Date.now();
+  s.autoCompactFailedAt = 0;
+  saveState();
+  return result;
+}
+
+async function maybeAutoCompact(chatId, s) {
+  if (!s.autoCompact || s.newSession || !s.contextWindow) return;
+  if (s.contextPct < s.autoCompactThreshold) return;
+  if (Date.now() - (s.lastCompactAt || 0) < 5 * 60 * 1000) return;
+  if (Date.now() - (s.autoCompactFailedAt || 0) < 5 * 60 * 1000) return;
+
+  const pct = (s.contextPct * 100).toFixed(1);
+  const threshold = Math.round(s.autoCompactThreshold * 100);
+  try {
+    await runCompact(chatId, s);
+    await send(chatId,
+      `🗜️ Auto-compacted context at ${pct}% (threshold ${threshold}%).`);
+  } catch (e) {
+    if (e.code === 'STOPPED') return;
+    s.autoCompactFailedAt = Date.now();
+    saveState();
+    log('auto-compact failed:', e.message);
+    await send(chatId, `⚠️ Auto-compact failed: ${redact(e.message).slice(0, 500)}`);
+  }
 }
 
 // ----------------------------------------------------------------- Attachments
@@ -707,6 +829,53 @@ function sessionsKeyboard(list) {
   return { inline_keyboard: rows };
 }
 
+function autoCompactMenu(s) {
+  const mark = pct =>
+    Math.abs(s.autoCompactThreshold - pct / 100) < 0.001 ? '✅ ' : '';
+  return {
+    inline_keyboard: [
+      [s.autoCompact
+        ? { text: '⛔ Turn off', callback_data: 'ac:off' }
+        : { text: '✅ Turn on', callback_data: 'ac:on' }],
+      [
+        { text: `${mark(60)}60%`, callback_data: 'ac:t:60' },
+        { text: `${mark(75)}75%`, callback_data: 'ac:t:75' },
+        { text: `${mark(85)}85%`, callback_data: 'ac:t:85' }
+      ]
+    ]
+  };
+}
+
+function autoCompactText(s) {
+  const last = s.lastCompactAt
+    ? new Date(s.lastCompactAt).toLocaleString('en-GB')
+    : 'never';
+  return `🗜️ Auto-compact\n` +
+    `status: ${s.autoCompact ? 'ON' : 'OFF'}\n` +
+    `threshold: ${Math.round(s.autoCompactThreshold * 100)}%\n` +
+    `context: ${contextLine(s)}\n` +
+    `last compact: ${last}\n\n` +
+    'When enabled, the bridge runs /compact after a reply once context crosses the threshold.';
+}
+
+async function showAutoCompact(chatId, s, editMessageId = null) {
+  const text = autoCompactText(s);
+  const markup = autoCompactMenu(s);
+  if (editMessageId) {
+    try {
+      await api('editMessageText', {
+        chat_id: chatId,
+        message_id: editMessageId,
+        text,
+        reply_markup: markup,
+        disable_web_page_preview: true
+      });
+      return;
+    } catch (_) {}
+  }
+  await send(chatId, text, { reply_markup: markup });
+}
+
 async function handleCommand(chatId, text, s) {
   const parts = text.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -761,6 +930,41 @@ async function handleCommand(chatId, text, s) {
         { reply_markup: sessionsKeyboard(list) });
     }
 
+    case '/compact': {
+      if (s.newSession && !s.lastSessionId) {
+        return send(chatId, 'No active session to compact yet. Send a message first.');
+      }
+      const queued = processing || jobQueue.length > 0;
+      enqueue(chatId, rest, 'compact', 'compact');
+      return send(chatId, queued
+        ? '🗜️ Compact queued. It will run after the current task.'
+        : (rest
+          ? `🗜️ Compacting context with instructions: ${rest}`
+          : '🗜️ Compacting context…'));
+    }
+
+    case '/autocompact': {
+      const [sub, value] = rest.split(/\s+/).filter(Boolean);
+      if (sub === 'on' || sub === 'off') {
+        s.autoCompact = sub === 'on';
+        saveState();
+        return send(chatId,
+          `🔄 Auto-compact ${s.autoCompact ? 'enabled' : 'disabled'} ` +
+          `(threshold ${Math.round(s.autoCompactThreshold * 100)}%).`);
+      }
+      if (sub === 'threshold' && value) {
+        let pct = Number(value);
+        if (pct > 1) pct = pct / 100;
+        if (!(pct > 0.1 && pct < 0.98)) {
+          return send(chatId, 'Threshold must be between 11% and 97%.');
+        }
+        s.autoCompactThreshold = pct;
+        saveState();
+        return send(chatId, `🔄 Auto-compact threshold → ${Math.round(pct * 100)}%.`);
+      }
+      return showAutoCompact(chatId, s);
+    }
+
     case '/status': {
       const running = activeJob
         ? `yes (${fmtDuration(Date.now() - activeJob.startedAt)})`
@@ -777,6 +981,8 @@ async function handleCommand(chatId, text, s) {
         `last session: ${s.lastSessionId || '-'}\n` +
         `running: ${running}\n` +
         `queue: ${jobQueue.length}\n` +
+        `auto-compact: ${s.autoCompact ? 'ON' : 'OFF'} (${Math.round(s.autoCompactThreshold * 100)}%)\n` +
+        `context: ${contextLine(s)}\n` +
         `session cost: ${fmtCost(s.lastTotal)} | total: ${fmtCost(s.spent)}\n` +
         `uptime: ${fmtDuration(Date.now() - startedAt)}`
       );
@@ -900,6 +1106,17 @@ async function runJob(job) {
       return;
     }
 
+    if (job.kind === 'compact') {
+      if (s.newSession && !s.lastSessionId) {
+        await send(job.chatId, 'No active session to compact yet. Send a message first.');
+        return;
+      }
+      const result = await runCompact(job.chatId, s, job.prompt);
+      const extra = result.text && result.text.trim() ? `\n\n${result.text.trim()}` : '';
+      await send(job.chatId, `✅ Context compacted.${extra}`);
+      return;
+    }
+
     const control = { stop: false };
     const result = await new Promise((resolve, reject) => {
       runZero(job.prompt, s, child => {
@@ -908,6 +1125,7 @@ async function runJob(job) {
     });
 
     updateCost(s, result.parsed);
+    updateUsage(s, result.parsed);
     s.newSession = false;
     s.resumeId = null;
     saveState();
@@ -920,6 +1138,7 @@ async function runJob(job) {
     if (denied) text += `\n\n⚠️ ${denied} tool call${denied === 1 ? '' : 's'} denied by the permission system.`;
 
     await send(job.chatId, text);
+    await maybeAutoCompact(job.chatId, s);
   } catch (e) {
     if (e.code === 'STOPPED') {
       await send(job.chatId, '⏹️ Cancelled.');
@@ -961,6 +1180,50 @@ async function handleCallback(cq) {
   const s = sessionFor(chatId);
   const data = cq.data || '';
   try {
+    if (data.startsWith('ac:')) {
+      const action = data.slice(3);
+      if (action === 'on' || action === 'off') {
+        const wanted = action === 'on';
+        if (s.autoCompact === wanted) {
+          await api('answerCallbackQuery', {
+            callback_query_id: cq.id,
+            text: wanted ? 'Already enabled' : 'Already disabled'
+          });
+          return;
+        }
+        s.autoCompact = wanted;
+        saveState();
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: s.autoCompact ? 'Auto-compact enabled' : 'Auto-compact disabled'
+        });
+      } else if (action.startsWith('t:')) {
+        const pct = Number(action.slice(2)) / 100;
+        if (!(pct > 0.1 && pct < 0.98)) {
+          await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Invalid threshold' });
+          return;
+        }
+        if (Math.abs(s.autoCompactThreshold - pct) < 0.001) {
+          await api('answerCallbackQuery', {
+            callback_query_id: cq.id,
+            text: `Already ${Math.round(pct * 100)}%`
+          });
+          return;
+        }
+        s.autoCompactThreshold = pct;
+        saveState();
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: `Threshold set to ${Math.round(pct * 100)}%`
+        });
+      } else {
+        await api('answerCallbackQuery', { callback_query_id: cq.id });
+        return;
+      }
+      await showAutoCompact(chatId, s, msg.message_id);
+      return;
+    }
+
     if (data === 'new') {
       s.newSession = true;
       s.resumeId = null;

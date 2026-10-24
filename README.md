@@ -12,6 +12,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 
 - 💬 **Two-way chat** — send a message, get the agent's reply, keep the context.
 - 🆕 **Session continuity** — `-c` between messages, `/new` to reset, `/resume` to pick an older session.
+- 🗜️ **Compaction** — manual `/compact [instructions]`, plus per-chat auto-compact with a confirmation UI and configurable threshold.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
 - 🧠 **Per-chat settings** — model, effort, and working directory independent of any terminal session.
 - 📎 **Attachments** — photos, documents, voice notes, and videos are downloaded and handed to the agent.
@@ -125,6 +126,8 @@ If your host tears down every process when the CLI exits, the bridge will stop w
 | `effort` | `ZERO_EFFORT` | `low` | Default effort (`low`, `medium`, `high`, `max`) |
 | `jobTimeoutMs` | `ZERO_JOB_TIMEOUT_MS` | `1800000` | Per-message timeout (30 min) |
 | `maxFileBytes` | `ZERO_MAX_FILE_BYTES` | `20971520` | Attachment size limit (20 MB) |
+| `autoCompact` | `ZERO_BRIDGE_AUTO_COMPACT` | `false` | Default auto-compact state for new chats (`1` enables) |
+| `autoCompactThreshold` | `ZERO_BRIDGE_AUTO_COMPACT_THRESHOLD` | `0.75` | Context fraction that triggers auto-compact |
 
 Environment variables take precedence. If `TELEGRAM_ALLOWED_CHAT_IDS` is set, it replaces the file list.
 
@@ -141,7 +144,9 @@ Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in 
 | `/resume` | Session picker with inline buttons |
 | `/resume <number\|id>` | Resume a specific session |
 | `/sessions` | Recent sessions for the working directory |
-| `/status` | Model, effort, folder, queue, cost, uptime |
+| `/compact [instructions]` | Summarize the conversation and free context |
+| `/autocompact` | Auto-compact status; enable/disable with inline confirmation |
+| `/status` | Model, effort, folder, queue, cost, context, uptime |
 | `/model [name]` | View or set the model |
 | `/effort [level]` | View or set effort |
 | `/cwd [path]` | View or set the working directory |
@@ -164,8 +169,29 @@ Unknown slash commands are forwarded to Zero, so skills such as `/commit` keep w
 🆕 New Session   🗂️ Sessions   ⏪ Resume
 🧠 Model         ⚙️ Effort     📁 Folder
 📊 Status        💰 Cost       ⏹️ Stop
-❓ Help
+🗜️ Compact       🔄 Auto-Compact   ❓ Help
 ```
+
+## Compaction
+
+`/compact [instructions]` runs Zero's non-interactive compaction command in the current session:
+
+```bash
+zero -p -c --output-format json -- "/compact [instructions]"
+```
+
+The session ID stays the same and the summary remains in context.
+
+Auto-compact is **per chat** and off by default:
+
+- Tap **🔄 Auto-Compact** or send `/autocompact`.
+- The bot shows the current context usage, the threshold, and inline buttons: **Turn on/off** and **60% / 75% / 85%**.
+- The setting changes only after you tap a button — that is the confirmation step.
+- After each reply, the bridge checks the latest usage from Zero's JSON output. If context usage is at or above the threshold, it runs `/compact`, then sends a short notice.
+- A 5-minute cooldown after each compact (and after failures) prevents retry loops.
+- `/autocompact on|off` and `/autocompact threshold 80` are available as direct shortcuts; `/autocompact` without arguments always shows the confirmation UI.
+
+The bridge passes `DISABLE_AUTO_COMPACT=1` to every `zero` child, so Zero's built-in auto-compact cannot bypass the Telegram toggle. Manual `/compact` is unaffected.
 
 ## Sessions
 

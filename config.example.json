@@ -6,5 +6,7 @@
   "model": "flash",
   "effort": "low",
   "jobTimeoutMs": 1800000,
-  "maxFileBytes": 20971520
+  "maxFileBytes": 20971520,
+  "autoCompact": false,
+  "autoCompactThreshold": 0.75
 }
