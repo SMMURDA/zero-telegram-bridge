@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.9] - 2026-10-24
+
+### Fixed
+
+- `AskUserQuestion` caused an `Answer questions?` error when the agent ran
+  through Telegram, because `zero -p` has no interactive UI. Bridge jobs now
+  pass `--disallowedTools AskUserQuestion` and a system instruction to ask
+  clarifying questions as plain text.
+
 ## [0.4.8] - 2026-10-24
 
 ### Changed
@@ -198,7 +207,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.9...HEAD
+[0.4.9]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.5...v0.4.6

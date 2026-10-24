@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.8-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.9-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -247,6 +247,8 @@ Agent replies are converted from Markdown to Telegram HTML before sending:
 - Links, headings, blockquotes, bullet lists, and horizontal rules
 
 If Telegram rejects the entities, the bridge falls back to sending the raw text so the answer is never lost. The converter lives in `src/markdown.js` and is covered by `npm test` (also run in CI).
+
+Interactive CLI tools such as `AskUserQuestion` are disabled for bridge jobs (`--disallowedTools AskUserQuestion`), and a system instruction tells the agent to ask clarifying questions as plain text. Answer the question with your next message.
 
 ### Health check
 

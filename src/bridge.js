@@ -110,6 +110,12 @@ const allowedChatIds = new Set(config.allowedChatIds.map(String));
 const CHUNK = 3800;
 const TYPING_MS = 4500;
 
+// `zero -p` has no interactive UI, and Telegram cannot answer AskUserQuestion.
+const TELEGRAM_SYSTEM_PROMPT =
+  'You are running through Telegram. Never use AskUserQuestion or other ' +
+  'interactive UI tools. If you need clarification, ask in plain text in ' +
+  'your final reply.';
+
 const KB = {
   newSession: '🆕 New Session',
   sessions: '🗂️ Sessions',
@@ -637,7 +643,9 @@ function zeroArgs(prompt, s, stream = true) {
   args.push(
     '--dangerously-skip-permissions',
     '--model', s.model,
-    '--effort', s.effort
+    '--effort', s.effort,
+    '--disallowedTools', 'AskUserQuestion',
+    '--append-system-prompt', TELEGRAM_SYSTEM_PROMPT
   );
   if (s.resumeId) args.push('-r', s.resumeId);
   else if (!s.newSession) args.push('-c');
