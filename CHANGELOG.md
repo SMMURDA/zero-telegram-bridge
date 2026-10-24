@@ -5,30 +5,22 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-> Releases up to v0.4.1 were tagged retroactively from the project's commit
-> history. The package manifest version was unified in v0.4.1.
+> Releases v0.1.0–v0.4.1 were tagged retroactively from the project's commit
+> history. Internal release tooling added after v0.4.1 is listed under
+> Unreleased and is not a published bridge release.
 
 ## [Unreleased]
-
-Nothing yet.
-
-## [0.4.3] - 2026-10-24
-
-### Changed
-
-- The release workflow now uses the matching `CHANGELOG.md` section as the
-  GitHub release body, appending a compare link to the previous tag.
-  Auto-generated notes remain the fallback when no section exists.
-
-## [0.4.2] - 2026-10-24
 
 ### Added
 
 - Automated GitHub release workflow: pushing a `v*` tag builds a source ZIP and
-  creates a release with generated notes.
+  creates a release with notes from the matching changelog section.
 
 ### Changed
 
+- The release workflow uses the matching `CHANGELOG.md` section as the GitHub
+  release body, appending a compare link to the previous tag. Auto-generated
+  notes remain the fallback when no section exists.
 - The versioning and release process is documented in the README.
 
 ## [0.4.1] - 2026-10-24
@@ -99,9 +91,7 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.3...HEAD
-[0.4.3]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...v0.4.2
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...HEAD
 [0.4.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.2.0...v0.3.0
