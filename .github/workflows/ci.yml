@@ -20,3 +20,5 @@ jobs:
           sh -n scripts/stop.sh
           sh -n scripts/supervise.sh
           sh -n hooks/session-start.sh
+      - name: Unit tests
+        run: npm test

@@ -24,6 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { spawn, execFile } = require('child_process');
+const { toTelegramHtml, splitMarkdown } = require('./markdown');
 
 const ROOT = path.resolve(__dirname, '..');
 const VERSION = (() => {
@@ -394,6 +395,27 @@ async function send(chatId, text, extra = {}) {
           await api('sendMessage', { chat_id: chatId, text: chunk, ...extra });
         } catch (e2) { log('send retry failed:', e2.message); }
       }
+    }
+  }
+}
+
+async function sendFormatted(chatId, markdown) {
+  const chunks = splitMarkdown(String(markdown == null ? '' : markdown), 2800);
+  if (!chunks.length) chunks.push('(no output)');
+
+  for (const chunk of chunks) {
+    const html = toTelegramHtml(chunk) || chunk;
+    try {
+      await api('sendMessage', {
+        chat_id: chatId,
+        text: html,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true
+      });
+    } catch (e) {
+      log('formatted send failed:', e.message);
+      // Telegram can reject malformed entities; deliver the raw text instead.
+      await send(chatId, chunk || '(no output)');
     }
   }
 }
@@ -1355,7 +1377,7 @@ async function runJob(job) {
     if (denied) text += `\n\n⚠️ ${denied} tool call${denied === 1 ? '' : 's'} denied by the permission system.`;
 
     await progress.finish({ ok: true });
-    await send(job.chatId, text);
+    await sendFormatted(job.chatId, text);
     await maybeAutoCompact(job.chatId, s);
   } catch (e) {
     if (progress) {

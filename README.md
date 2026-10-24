@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.3-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -20,6 +20,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
 - 🧠 **Per-chat settings** — model, effort, and working directory independent of any terminal session.
 - 📡 **Live progress** — one Telegram message updates in place as the agent runs Bash, edits files, reads, searches, and fetches.
+- ✨ **Markdown rendering** — bold, italic, code blocks, links, headings, and quotes render properly in Telegram instead of showing literal markers.
 - 📎 **Attachments** — photos, documents, voice notes, and videos are downloaded and handed to the agent.
 - ↩️ **Reply context** — quoting a Telegram message includes the quoted text in the prompt.
 - ⌨️ **Reply keyboard** — Session, Resume, Model, Effort, Folder, Status, Cost, Stop, Help.
@@ -228,6 +229,16 @@ While a job runs, the bridge reads Zero's streaming output and updates **one** T
 - Edits are throttled to roughly one per 1.5 seconds and keep the latest 14 steps.
 - When the job ends the header becomes `✅ Done in Xs`, `⏹️ Stopped`, `⏱️ Timed out`, or `❌ Failed`.
 - The final answer is sent as a separate message.
+
+## Formatting
+
+Agent replies are converted from Markdown to Telegram HTML before sending:
+
+- Bold, italic, bold+italic, and strikethrough
+- Inline code and fenced code blocks (HTML inside code is escaped)
+- Links, headings, blockquotes, bullet lists, and horizontal rules
+
+If Telegram rejects the entities, the bridge falls back to sending the raw text so the answer is never lost. The converter lives in `src/markdown.js` and is covered by `npm test` (also run in CI).
 
 ## How it works
 
