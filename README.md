@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.2-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -316,6 +316,20 @@ zero -p --output-format json "reply with OK"
 This project follows [Semantic Versioning](https://semver.org/). Every release is tagged `vMAJOR.MINOR.PATCH`, documented in [CHANGELOG.md](CHANGELOG.md), and shipped with a source ZIP asset on the [Releases](https://github.com/SMMURDA/zero-telegram-bridge/releases) page.
 
 The running version is visible in `/status`, `/version`, `/config`, and the startup log/message.
+
+### Releasing
+
+1. Update `version` in `package.json` and add a section to `CHANGELOG.md`.
+2. Commit, then tag:
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z — short description"
+   ```
+3. Push the commit and tag:
+   ```bash
+   git push origin main --tags
+   ```
+
+The `Release` GitHub Actions workflow builds `zero-telegram-bridge-vX.Y.Z.zip` from the tagged commit and creates the GitHub release with generated notes.
 
 ## License
 

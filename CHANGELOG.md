@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.2] - 2026-10-24
+
+### Added
+
+- Automated GitHub release workflow: pushing a `v*` tag builds a source ZIP and
+  creates a release with generated notes.
+
+### Changed
+
+- The versioning and release process is documented in the README.
+
 ## [0.4.1] - 2026-10-24
 
 ### Fixed
@@ -80,7 +91,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.2.0...v0.3.0

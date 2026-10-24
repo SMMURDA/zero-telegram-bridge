@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build source archive
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git archive --format=zip \
+            --prefix="zero-telegram-bridge-${VERSION}/" \
+            -o "zero-telegram-bridge-${GITHUB_REF_NAME}.zip" \
+            HEAD
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "zero-telegram-bridge-${GITHUB_REF_NAME}.zip" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
