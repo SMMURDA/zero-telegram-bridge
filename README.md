@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.6-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.7-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -16,6 +16,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - 💬 **Two-way chat** — send a message, get the agent's reply, keep the context.
 - 🆕 **Session continuity** — `-c` between messages, `/new` to reset, `/resume` to pick an older session.
 - 🖥️ **All projects** — terminal sessions and Telegram sessions appear in the same picker; resuming switches to the session's project directory.
+- ⚠️ **Active-session guard** — warns and asks for confirmation before resuming a session whose project has a live terminal CLI.
 - 🗜️ **Compaction** — manual `/compact [instructions]`, plus per-chat auto-compact with a confirmation UI and configurable threshold.
 - ⏹️ **ESC-like stop** — `/stop` sends `SIGINT` first, then escalates, so you can give the agent a new direction immediately.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
@@ -210,7 +211,11 @@ Tapping a session:
 2. Switches the bot's working directory to the cwd recorded in that session.
 3. Clears the buttons and confirms the active session.
 
-The cwd switch is required: `zero -p -r <id>` only finds a session inside its own project directory. After the resumed message, normal `-c` continuation takes over in that project. Avoid using the same session from a terminal and the bot at the same time.
+The cwd switch is required: `zero -p -r <id>` only finds a session inside its own project directory. After the resumed message, normal `-c` continuation takes over in that project.
+
+If an interactive Zero CLI is running in the session's project, `/resume` warns first and requires an inline **Resume anyway** / **Cancel** confirmation (valid for 5 minutes). Resuming anyway is possible, but both processes may write the same session and the bot agent will see the terminal context. Avoid using the same session from a terminal and the bot at the same time.
+
+Active-session detection reads `/proc` and is Linux-only; on other platforms the guard is skipped.
 
 `/status` reports context for the bot's own session. After `/resume`, it reads the session's last usage entry and labels the value `last known from session` until the next bot turn updates it. `/new` and `/cwd` reset the context display for the fresh session.
 

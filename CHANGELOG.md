@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.7] - 2026-10-24
+
+### Added
+
+- Safety guard before resuming a session whose project has an active
+  interactive Zero CLI. The bot shows a warning and requires an inline
+  **Resume anyway** / **Cancel** confirmation, valid for 5 minutes.
+- `findActiveTerminal` detection based on interactive CLI processes (TTY stdin,
+  matching cwd), ignoring the bot's own `-p` children.
+
+### Changed
+
+- `/resume` and the inline session picker share the same guard.
+- `/new`, `/cwd`, and cancelling clear the pending confirmation.
+
 ## [0.4.6] - 2026-10-24
 
 ### Fixed
@@ -168,7 +183,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.6...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.7...HEAD
+[0.4.7]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.3...v0.4.4

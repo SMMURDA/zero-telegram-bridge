@@ -164,6 +164,67 @@ function readLastUsage(file) {
 }
 
 /**
+ * Detect an interactive Zero CLI process in a given working directory.
+ * The bot's own `zero -p` children are ignored: they are non-interactive and
+ * their stdin is not a TTY.
+ */
+function findActiveTerminal(cwd) {
+  if (!cwd) return null;
+  let target;
+  try {
+    target = path.resolve(cwd);
+  } catch (_) {
+    return null;
+  }
+
+  let entries;
+  try {
+    entries = fs.readdirSync('/proc');
+  } catch (_) {
+    return null;
+  }
+
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    const pid = Number(name);
+    if (pid === process.pid) continue;
+
+    let cmdline;
+    try {
+      cmdline = fs.readFileSync(`/proc/${name}/cmdline`, 'utf8')
+        .replace(/\0/g, ' ')
+        .trim();
+    } catch (_) {
+      continue;
+    }
+
+    if (!cmdline.includes('zero-cli')) continue;
+    // `-p`/`--print` is the bot's one-shot child, not an interactive session.
+    if (/(^|\s)(-p|--print)(\s|$)/.test(cmdline)) continue;
+
+    let stdin;
+    try {
+      stdin = fs.readlinkSync(`/proc/${name}/fd/0`);
+    } catch (_) {
+      continue;
+    }
+    if (!/^\/dev\/(pts\/|tty)/.test(stdin)) continue;
+
+    let processCwd;
+    try {
+      processCwd = fs.readlinkSync(`/proc/${name}/cwd`);
+    } catch (_) {
+      continue;
+    }
+    if (path.resolve(processCwd) !== target) continue;
+
+    return { pid, cmdline };
+  }
+
+  return null;
+}
+
+/**
  * Look up one exact session ID without the recency limit used for listings.
  * Zero's `-r` is scoped to the session's project directory, so the caller also
  * needs the cwd returned here.
@@ -201,6 +262,7 @@ function findSessionById(home, id) {
 
 module.exports = {
   discoverSessions,
+  findActiveTerminal,
   findSessionById,
   readLastUsage,
   readSessionMeta,

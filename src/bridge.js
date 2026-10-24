@@ -27,6 +27,7 @@ const { spawn, execFile } = require('child_process');
 const { toTelegramHtml, splitMarkdown } = require('./markdown');
 const {
   discoverSessions,
+  findActiveTerminal,
   findSessionById,
   readLastUsage
 } = require('./sessions');
@@ -283,7 +284,8 @@ function sessionFor(chatId) {
       contextPct: 0,
       contextSource: 'bot',
       lastCompactAt: null,
-      autoCompactFailedAt: 0
+      autoCompactFailedAt: 0,
+      pendingResume: null
     };
   }
   const s = state.sessions[id];
@@ -296,6 +298,7 @@ function sessionFor(chatId) {
   if (typeof s.contextPct !== 'number') s.contextPct = 0;
   if (!s.contextSource) s.contextSource = 'bot';
   if (typeof s.autoCompactFailedAt !== 'number') s.autoCompactFailedAt = 0;
+  if (!('pendingResume' in s)) s.pendingResume = null;
   return s;
 }
 
@@ -406,7 +409,7 @@ async function send(chatId, text, extra = {}) {
   }
 }
 
-async function sendFormatted(chatId, markdown) {
+async function sendFormatted(chatId, markdown, extra = {}) {
   const chunks = splitMarkdown(String(markdown == null ? '' : markdown), 2800);
   if (!chunks.length) chunks.push('(no output)');
 
@@ -417,12 +420,13 @@ async function sendFormatted(chatId, markdown) {
         chat_id: chatId,
         text: html,
         parse_mode: 'HTML',
-        disable_web_page_preview: true
+        disable_web_page_preview: true,
+        ...extra
       });
     } catch (e) {
       log('formatted send failed:', e.message);
       // Telegram can reject malformed entities; deliver the raw text instead.
-      await send(chatId, chunk || '(no output)');
+      await send(chatId, chunk || '(no output)', extra);
     }
   }
 }
@@ -1018,6 +1022,31 @@ function applyResumedContext(s, meta) {
   s.lastCompactAt = null;
 }
 
+function activateResume(s, meta) {
+  s.resumeId = meta.id;
+  s.newSession = false;
+  s.cwd = meta.cwd;
+  s.pendingResume = null;
+  applyResumedContext(s, meta);
+}
+
+function resumeWarningText(meta, active) {
+  const title = oneLine(String(meta.title || '').replace(/`/g, "'"), 80);
+  return `⚠️ **Active terminal session detected**\n\n` +
+    `Zero CLI is running in \`${displayCwd(meta.cwd)}\` (pid ${active.pid}).\n\n` +
+    `Resuming \`${meta.id.slice(0, 8)}\`${title ? ` — ${title}` : ''} from Telegram can conflict with that terminal: both may write to the same session, and the bot agent will see the terminal context.\n\n` +
+    'Recommended: finish or close the terminal session first.';
+}
+
+function resumeWarningKeyboard(meta) {
+  return {
+    inline_keyboard: [[
+      { text: '⚠️ Resume anyway', callback_data: `resume-force:${meta.id}` },
+      { text: '❌ Cancel', callback_data: 'resume-cancel' }
+    ]]
+  };
+}
+
 function displayCwd(cwd) {
   if (!cwd) return '?';
   if (cwd === HOME) return '~';
@@ -1194,6 +1223,7 @@ async function handleCommand(chatId, text, s) {
       s.resumeId = null;
       s.lastSessionId = null;
       s.lastTotal = 0;
+      s.pendingResume = null;
       resetContext(s);
       saveState();
       return send(chatId, '🆕 New conversation ready. The next message starts a fresh Zero session.');
@@ -1219,10 +1249,15 @@ async function handleCommand(chatId, text, s) {
         return send(chatId, 'Session not found across projects. Use /resume to list.');
       }
 
-      s.resumeId = meta.id;
-      s.newSession = false;
-      s.cwd = meta.cwd;
-      applyResumedContext(s, meta);
+      const active = findActiveTerminal(meta.cwd);
+      if (active) {
+        s.pendingResume = { id: meta.id, cwd: meta.cwd, at: Date.now() };
+        saveState();
+        return sendFormatted(chatId, resumeWarningText(meta, active),
+          { reply_markup: resumeWarningKeyboard(meta) });
+      }
+
+      activateResume(s, meta);
       saveState();
       return send(chatId, `⏪ Next message will resume: ${meta.id}\n📁 ${meta.cwd}`);
     }
@@ -1324,6 +1359,7 @@ async function handleCommand(chatId, text, s) {
       s.cwd = target;
       s.newSession = true;
       s.resumeId = null;
+      s.pendingResume = null;
       resetContext(s);
       saveState();
       return send(chatId, `📁 Working directory → ${target}\nA new session will start in this folder.`);
@@ -1550,6 +1586,7 @@ async function handleCallback(cq) {
       s.resumeId = null;
       s.lastSessionId = null;
       s.lastTotal = 0;
+      s.pendingResume = null;
       resetContext(s);
       saveState();
       await api('answerCallbackQuery', { callback_query_id: cq.id, text: '🆕 New session ready' });
@@ -1557,6 +1594,46 @@ async function handleCallback(cq) {
       await send(chatId,
         '🆕 New conversation ready. The next message starts a fresh Zero session.',
         { reply_markup: MAIN_KEYBOARD });
+      return;
+    }
+
+    if (data.startsWith('resume-force:')) {
+      const id = data.slice('resume-force:'.length);
+      const pending = s.pendingResume;
+      if (!pending || pending.id !== id || Date.now() - pending.at > 5 * 60 * 1000) {
+        s.pendingResume = null;
+        saveState();
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: 'Confirmation expired. Use /resume again.'
+        });
+        await removeInline(chatId, msg.message_id);
+        return;
+      }
+
+      const meta = findSessionById(HOME, id);
+      if (!meta) {
+        await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Session not found' });
+        return;
+      }
+
+      activateResume(s, meta);
+      saveState();
+      await api('answerCallbackQuery', { callback_query_id: cq.id, text: '⏪ Session activated' });
+      await removeInline(chatId, msg.message_id);
+      await send(chatId,
+        `⏪ Session active: ${id.slice(0, 8)}\n📁 ${meta.cwd}\n` +
+        'Warning: the terminal session may still be active. Avoid using it there while the bot runs.',
+        { reply_markup: MAIN_KEYBOARD });
+      return;
+    }
+
+    if (data === 'resume-cancel') {
+      s.pendingResume = null;
+      saveState();
+      await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Cancelled' });
+      await removeInline(chatId, msg.message_id);
+      await send(chatId, 'Resume cancelled. The terminal session was left untouched.');
       return;
     }
 
@@ -1568,10 +1645,21 @@ async function handleCallback(cq) {
         await api('answerCallbackQuery', { callback_query_id: cq.id, text: 'Session not found' });
         return;
       }
-      s.resumeId = id;
-      s.newSession = false;
-      s.cwd = meta.cwd;
-      applyResumedContext(s, meta);
+
+      const active = findActiveTerminal(meta.cwd);
+      if (active) {
+        s.pendingResume = { id, cwd: meta.cwd, at: Date.now() };
+        saveState();
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: '⚠️ Warning sent'
+        });
+        await sendFormatted(chatId, resumeWarningText(meta, active),
+          { reply_markup: resumeWarningKeyboard(meta) });
+        return;
+      }
+
+      activateResume(s, meta);
       saveState();
       await api('answerCallbackQuery', { callback_query_id: cq.id, text: '⏪ Session activated' });
       await removeInline(chatId, msg.message_id);
