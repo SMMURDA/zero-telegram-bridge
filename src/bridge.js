@@ -418,6 +418,151 @@ function typingLoop(chatId) {
   return () => { alive = false; };
 }
 
+// --------------------------------------------------------- Live progress log
+function oneLine(text, max = 140) {
+  return String(text == null ? '' : text)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+function formatToolUse(name, input) {
+  const inp = input || {};
+  const file = inp.file_path || inp.path || inp.notebook_path || '';
+  switch (name) {
+    case 'Bash':
+      return `🔧 Bash: ${oneLine(inp.command, 170)}`;
+    case 'Read':
+      return `📖 Read: ${oneLine(file, 140)}`;
+    case 'Edit':
+    case 'MultiEdit':
+      return `✏️ ${name}: ${oneLine(file, 140)}`;
+    case 'Write':
+      return `📝 Write: ${oneLine(file, 140)}`;
+    case 'Grep':
+      return `🔍 Grep: ${oneLine(inp.pattern, 90)}` +
+        (inp.path ? ` in ${oneLine(inp.path, 60)}` : '');
+    case 'Glob':
+      return `🔎 Glob: ${oneLine(inp.pattern, 110)}`;
+    case 'WebFetch':
+      return `🌐 Fetch: ${oneLine(inp.url, 140)}`;
+    case 'WebSearch':
+      return `🔎 Web: ${oneLine(inp.query, 140)}`;
+    case 'Task':
+    case 'Agent':
+      return `🤖 Agent: ${oneLine(inp.description || inp.prompt, 140)}`;
+    case 'TodoWrite':
+      return '📋 Todos updated';
+    default: {
+      const hint = inp.command || inp.file_path || inp.path ||
+        inp.pattern || inp.query || inp.url || '';
+      return `🛠️ ${name}${hint ? `: ${oneLine(hint, 140)}` : ''}`;
+    }
+  }
+}
+
+// One Telegram message per job, edited as tools run. The message is created
+// lazily on the first tool call, so simple replies do not leave clutter.
+function createProgress(chatId) {
+  const started = Date.now();
+  let msg = null;
+  let ensurePromise = null;
+  let lines = [];
+  let total = 0;
+  let closed = false;
+  let chain = Promise.resolve();
+  let flushTimer = null;
+  let lastFlush = 0;
+
+  const elapsed = () => Math.floor((Date.now() - started) / 1000);
+
+  const ensure = () => {
+    if (msg) return Promise.resolve(true);
+    if (!ensurePromise) {
+      ensurePromise = api('sendMessage', {
+        chat_id: chatId,
+        text: '🧠 Working…',
+        disable_web_page_preview: true
+      }).then(m => {
+        msg = m;
+        return true;
+      }).catch(e => {
+        log('progress message failed:', e.message);
+        return false;
+      });
+    }
+    return ensurePromise;
+  };
+
+  const render = () => {
+    const hidden = total - lines.length;
+    const note = hidden > 0
+      ? `… ${hidden} earlier step${hidden === 1 ? '' : 's'}\n`
+      : '';
+    return `🧠 Working… ${elapsed()}s\n\n${note}${lines.join('\n')}`;
+  };
+
+  const edit = (text) => {
+    if (!msg) return Promise.resolve();
+    chain = chain.then(() => api('editMessageText', {
+      chat_id: chatId,
+      message_id: msg.message_id,
+      text,
+      disable_web_page_preview: true
+    })).catch(e => {
+      if (!/not modified/i.test(e.message)) log('progress edit failed:', e.message);
+    });
+    return chain;
+  };
+
+  const schedule = () => {
+    if (closed || flushTimer) return;
+    const wait = Math.max(0, 1500 - (Date.now() - lastFlush));
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      if (closed) return;
+      lastFlush = Date.now();
+      edit(render());
+    }, wait);
+  };
+
+  return {
+    addTool(name, input) {
+      if (closed) return;
+      total++;
+      lines.push(`[${elapsed()}s] ${formatToolUse(name, input)}`);
+      if (lines.length > 14) lines = lines.slice(-14);
+      ensure().then(ok => { if (ok) schedule(); });
+    },
+    async finish(opts = {}) {
+      if (closed) return;
+      closed = true;
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      await ensurePromise;
+      if (!msg) return; // No tool calls: no progress message to finalize.
+      await chain;
+
+      const secs = elapsed();
+      let header;
+      if (opts.ok) header = `✅ Done in ${secs}s`;
+      else if (opts.status === 'stopped') header = `⏹️ Stopped after ${secs}s`;
+      else if (opts.status === 'timeout') header = `⏱️ Timed out after ${secs}s`;
+      else header = `❌ Failed after ${secs}s`;
+
+      const hidden = total - lines.length;
+      const note = hidden > 0
+        ? `… ${hidden} earlier step${hidden === 1 ? '' : 's'}\n`
+        : '';
+      let text = `${header}\n\n${note}${lines.join('\n')}`;
+      if (text.length > 3900) text = text.slice(text.length - 3900);
+      await edit(text);
+    }
+  };
+}
+
 // ------------------------------------------------------------------- Zero CLI
 function killTree(child, signal = 'SIGTERM') {
   if (!child || !child.pid) return;
@@ -425,14 +570,14 @@ function killTree(child, signal = 'SIGTERM') {
   catch (_) { try { child.kill(signal); } catch (_) {} }
 }
 
-function zeroArgs(prompt, s) {
-  const args = [
-    '-p',
-    '--output-format', 'json',
+function zeroArgs(prompt, s, stream = true) {
+  const args = ['-p', '--output-format', stream ? 'stream-json' : 'json'];
+  if (stream) args.push('--verbose');
+  args.push(
     '--dangerously-skip-permissions',
     '--model', s.model,
     '--effort', s.effort
-  ];
+  );
   if (s.resumeId) args.push('-r', s.resumeId);
   else if (!s.newSession) args.push('-c');
   args.push('--', prompt);
@@ -441,13 +586,16 @@ function zeroArgs(prompt, s) {
 
 function runZero(prompt, s, onChild, control) {
   return new Promise((resolve, reject) => {
-    const args = zeroArgs(prompt, s);
+    const stream = !(control && control.stream === false);
+    const progress = control && control.progress;
+    const args = zeroArgs(prompt, s, stream);
     log('run zero', JSON.stringify({
       cwd: s.cwd,
       model: s.model,
       effort: s.effort,
       resume: s.resumeId || null,
       cont: !s.newSession,
+      stream,
       len: prompt.length
     }));
 
@@ -470,9 +618,40 @@ function runZero(prompt, s, onChild, control) {
     let stdout = '';
     let stderr = '';
     let killedBy = null;
+    let lineBuf = '';
+    const seenTools = new Set();
     const limit = 32 * 1024 * 1024;
 
-    child.stdout.on('data', d => { if (stdout.length < limit) stdout += d; });
+    const emitTool = block => {
+      if (!progress || !block || block.type !== 'tool_use') return;
+      if (block.id && seenTools.has(block.id)) return;
+      if (block.id) seenTools.add(block.id);
+      progress.addTool(block.name, block.input || {});
+    };
+
+    const handleLine = raw => {
+      const line = raw.trim();
+      if (!line.startsWith('{')) return;
+      let evt;
+      try { evt = JSON.parse(line); } catch (_) { return; }
+      if (evt.type === 'assistant' && evt.message && Array.isArray(evt.message.content)) {
+        for (const block of evt.message.content) emitTool(block);
+      } else if (evt.type === 'stream_event' &&
+        evt.event && evt.event.type === 'content_block_start') {
+        emitTool(evt.event.content_block);
+      }
+    };
+
+    child.stdout.on('data', d => {
+      if (stdout.length < limit) stdout += d;
+      if (!stream) return;
+      lineBuf += d;
+      let idx;
+      while ((idx = lineBuf.indexOf('\n')) !== -1) {
+        handleLine(lineBuf.slice(0, idx));
+        lineBuf = lineBuf.slice(idx + 1);
+      }
+    });
     child.stderr.on('data', d => { if (stderr.length < limit) stderr += d; });
 
     const timeout = setTimeout(() => {
@@ -491,6 +670,7 @@ function runZero(prompt, s, onChild, control) {
         return reject(Object.assign(new Error('timeout'), { code: 'TIMEOUT' }));
       }
 
+      if (stream && lineBuf.trim()) handleLine(lineBuf);
       const parsed = parseResult(stdout);
       if (parsed) {
         if (parsed.is_error) {
@@ -620,7 +800,7 @@ async function runCompact(chatId, s, instructions = '') {
   const prompt = instructions ? `/compact ${instructions}` : '/compact';
   log('compact', JSON.stringify({ chatId, instructions: instructions.slice(0, 200) }));
 
-  const control = { stop: false };
+  const control = { stop: false, stream: false };
   const result = await new Promise((resolve, reject) => {
     runZero(prompt, s, child => {
       activeJob = { child, control, chatId, startedAt: Date.now() };
@@ -1099,6 +1279,7 @@ async function pump() {
 async function runJob(job) {
   const s = sessionFor(job.chatId);
   const stopTyping = typingLoop(job.chatId);
+  let progress = null;
   try {
     if (job.kind === 'shell') {
       const out = await runShell(job.prompt, s.cwd);
@@ -1117,7 +1298,8 @@ async function runJob(job) {
       return;
     }
 
-    const control = { stop: false };
+    progress = createProgress(job.chatId);
+    const control = { stop: false, progress };
     const result = await new Promise((resolve, reject) => {
       runZero(job.prompt, s, child => {
         activeJob = { child, control, chatId: job.chatId, startedAt: Date.now() };
@@ -1137,9 +1319,18 @@ async function runJob(job) {
       : 0;
     if (denied) text += `\n\n⚠️ ${denied} tool call${denied === 1 ? '' : 's'} denied by the permission system.`;
 
+    await progress.finish({ ok: true });
     await send(job.chatId, text);
     await maybeAutoCompact(job.chatId, s);
   } catch (e) {
+    if (progress) {
+      await progress.finish({
+        ok: false,
+        status: e.code === 'STOPPED' ? 'stopped'
+          : e.code === 'TIMEOUT' ? 'timeout'
+          : 'error'
+      });
+    }
     if (e.code === 'STOPPED') {
       await send(job.chatId, '⏹️ Cancelled.');
     } else if (e.code === 'TIMEOUT') {

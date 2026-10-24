@@ -15,6 +15,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - 🗜️ **Compaction** — manual `/compact [instructions]`, plus per-chat auto-compact with a confirmation UI and configurable threshold.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
 - 🧠 **Per-chat settings** — model, effort, and working directory independent of any terminal session.
+- 📡 **Live progress** — one Telegram message updates in place as the agent runs Bash, edits files, reads, searches, and fetches.
 - 📎 **Attachments** — photos, documents, voice notes, and videos are downloaded and handed to the agent.
 - ↩️ **Reply context** — quoting a Telegram message includes the quoted text in the prompt.
 - ⌨️ **Reply keyboard** — Session, Resume, Model, Effort, Folder, Status, Cost, Stop, Help.
@@ -205,18 +206,39 @@ Tapping a session:
 
 The next message runs `zero -p -r <id>`. After that, normal `-c` continuation takes over.
 
+## Live progress
+
+While a job runs, the bridge reads Zero's streaming output and updates **one** Telegram message in place:
+
+```
+🧠 Working… 18s
+
+[3s] 🔧 Bash: ls -la
+[7s] 📖 Read: src/bridge.js
+[11s] ✏️ Edit: src/bridge.js
+[16s] 🔧 Bash: node --check src/bridge.js
+```
+
+- The message is created lazily on the first tool call, so simple chat replies leave no extra message behind.
+- Recognized activities: Bash, Read, Edit/MultiEdit/Write, Grep/Glob, WebFetch/WebSearch, Agent/Task, and a generic fallback for other tools.
+- Edits are throttled to roughly one per 1.5 seconds and keep the latest 14 steps.
+- When the job ends the header becomes `✅ Done in Xs`, `⏹️ Stopped`, `⏱️ Timed out`, or `❌ Failed`.
+- The final answer is sent as a separate message.
+
 ## How it works
 
-For each message the bridge runs:
+For each normal message the bridge runs:
 
 ```bash
 zero -p \
-  --output-format json \
+  --output-format stream-json --verbose \
   --dangerously-skip-permissions \
   --model <model> \
   --effort <effort> \
   -- "$PROMPT"
 ```
+
+Compaction jobs use `--output-format json`.
 
 - `-c` is added when continuing the current conversation.
 - `-r <session-id>` is used for an explicit resume.
