@@ -125,6 +125,45 @@ function discoverSessions(home, limit = 12) {
 }
 
 /**
+ * Read the token count from the last assistant usage entry in a session.
+ * Used to show a resumed session's context before the bot runs a new turn.
+ */
+function readLastUsage(file) {
+  let tail;
+  try {
+    const stat = fs.statSync(file);
+    const size = Math.min(stat.size, 512 * 1024);
+    const fd = fs.openSync(file, 'r');
+    tail = Buffer.alloc(size);
+    fs.readSync(fd, tail, 0, size, stat.size - size);
+    fs.closeSync(fd);
+  } catch (_) {
+    return null;
+  }
+
+  const lines = tail.toString('utf8').split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith('{')) continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch (_) {
+      continue;
+    }
+    const usage = (entry.message && entry.message.usage) || entry.usage;
+    if (!usage) continue;
+    const tokens =
+      (usage.input_tokens || 0) +
+      (usage.cache_read_input_tokens || 0) +
+      (usage.cache_creation_input_tokens || 0) +
+      (usage.output_tokens || 0);
+    if (tokens > 0) return tokens;
+  }
+  return null;
+}
+
+/**
  * Look up one exact session ID without the recency limit used for listings.
  * Zero's `-r` is scoped to the session's project directory, so the caller also
  * needs the cwd returned here.
@@ -163,6 +202,7 @@ function findSessionById(home, id) {
 module.exports = {
   discoverSessions,
   findSessionById,
+  readLastUsage,
   readSessionMeta,
   extractTitle
 };

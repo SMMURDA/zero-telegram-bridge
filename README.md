@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.4.5-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.6-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://github.com/paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -211,6 +211,8 @@ Tapping a session:
 3. Clears the buttons and confirms the active session.
 
 The cwd switch is required: `zero -p -r <id>` only finds a session inside its own project directory. After the resumed message, normal `-c` continuation takes over in that project. Avoid using the same session from a terminal and the bot at the same time.
+
+`/status` reports context for the bot's own session. After `/resume`, it reads the session's last usage entry and labels the value `last known from session` until the next bot turn updates it. `/new` and `/cwd` reset the context display for the fresh session.
 
 ## Live progress
 

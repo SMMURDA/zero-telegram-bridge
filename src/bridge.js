@@ -25,7 +25,11 @@ const path = require('path');
 const https = require('https');
 const { spawn, execFile } = require('child_process');
 const { toTelegramHtml, splitMarkdown } = require('./markdown');
-const { discoverSessions, findSessionById } = require('./sessions');
+const {
+  discoverSessions,
+  findSessionById,
+  readLastUsage
+} = require('./sessions');
 
 const ROOT = path.resolve(__dirname, '..');
 const VERSION = (() => {
@@ -277,6 +281,7 @@ function sessionFor(chatId) {
       lastContextTokens: 0,
       contextWindow: null,
       contextPct: 0,
+      contextSource: 'bot',
       lastCompactAt: null,
       autoCompactFailedAt: 0
     };
@@ -289,6 +294,7 @@ function sessionFor(chatId) {
   if (typeof s.autoCompactThreshold !== 'number') s.autoCompactThreshold = config.autoCompactThreshold;
   if (typeof s.lastContextTokens !== 'number') s.lastContextTokens = 0;
   if (typeof s.contextPct !== 'number') s.contextPct = 0;
+  if (!s.contextSource) s.contextSource = 'bot';
   if (typeof s.autoCompactFailedAt !== 'number') s.autoCompactFailedAt = 0;
   return s;
 }
@@ -828,6 +834,7 @@ function updateUsage(s, parsed) {
   s.contextPct = s.contextWindow
     ? Math.min(1, s.lastContextTokens / s.contextWindow)
     : 0;
+  s.contextSource = 'bot';
 }
 
 function fmtTokens(n) {
@@ -992,6 +999,23 @@ function fmtDuration(ms) {
 
 function fmtCost(n) {
   return '$' + (Number(n) || 0).toFixed(6);
+}
+
+function resetContext(s) {
+  s.lastContextTokens = 0;
+  s.contextPct = 0;
+  s.contextSource = 'bot';
+  s.lastCompactAt = null;
+}
+
+function applyResumedContext(s, meta) {
+  const tokens = readLastUsage(meta.file);
+  s.lastContextTokens = tokens || 0;
+  s.contextPct = tokens && s.contextWindow
+    ? Math.min(1, tokens / s.contextWindow)
+    : 0;
+  s.contextSource = tokens ? 'resumed' : 'bot';
+  s.lastCompactAt = null;
 }
 
 function displayCwd(cwd) {
@@ -1170,6 +1194,7 @@ async function handleCommand(chatId, text, s) {
       s.resumeId = null;
       s.lastSessionId = null;
       s.lastTotal = 0;
+      resetContext(s);
       saveState();
       return send(chatId, '🆕 New conversation ready. The next message starts a fresh Zero session.');
 
@@ -1197,6 +1222,7 @@ async function handleCommand(chatId, text, s) {
       s.resumeId = meta.id;
       s.newSession = false;
       s.cwd = meta.cwd;
+      applyResumedContext(s, meta);
       saveState();
       return send(chatId, `⏪ Next message will resume: ${meta.id}\n📁 ${meta.cwd}`);
     }
@@ -1262,7 +1288,9 @@ async function handleCommand(chatId, text, s) {
         `running: ${running}\n` +
         `queue: ${jobQueue.length}\n` +
         `auto-compact: ${s.autoCompact ? 'ON' : 'OFF'} (${Math.round(s.autoCompactThreshold * 100)}%)\n` +
-        `context: ${contextLine(s)}\n` +
+        `context: ${contextLine(s)}${s.contextSource === 'resumed'
+          ? ' (last known from session)'
+          : ' (bot session)'}\n` +
         `session cost: ${fmtCost(s.lastTotal)} | total: ${fmtCost(s.spent)}\n` +
         `uptime: ${fmtDuration(Date.now() - startedAt)}`
       );
@@ -1296,6 +1324,7 @@ async function handleCommand(chatId, text, s) {
       s.cwd = target;
       s.newSession = true;
       s.resumeId = null;
+      resetContext(s);
       saveState();
       return send(chatId, `📁 Working directory → ${target}\nA new session will start in this folder.`);
     }
@@ -1521,6 +1550,7 @@ async function handleCallback(cq) {
       s.resumeId = null;
       s.lastSessionId = null;
       s.lastTotal = 0;
+      resetContext(s);
       saveState();
       await api('answerCallbackQuery', { callback_query_id: cq.id, text: '🆕 New session ready' });
       await removeInline(chatId, msg.message_id);
@@ -1541,6 +1571,7 @@ async function handleCallback(cq) {
       s.resumeId = id;
       s.newSession = false;
       s.cwd = meta.cwd;
+      applyResumedContext(s, meta);
       saveState();
       await api('answerCallbackQuery', { callback_query_id: cq.id, text: '⏪ Session activated' });
       await removeInline(chatId, msg.message_id);

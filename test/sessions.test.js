@@ -7,6 +7,7 @@ const path = require('path');
 const {
   discoverSessions,
   findSessionById,
+  readLastUsage,
   readSessionMeta
 } = require('../src/sessions');
 
@@ -95,6 +96,38 @@ try {
   assert.strictEqual(found.cwd, '/home/alice');
   assert.strictEqual(found.title, 'old terminal session');
   assert.strictEqual(findSessionById(tmp, 'does-not-exist'), null);
+
+  const usageFile = writeSession('-home-carol', '44444444-4444-4444-8444-444444444444', {
+    cwd: '/home/carol',
+    mtime: now - 20_000,
+    lines: [
+      JSON.stringify({ type: '_spec', started_at: '2026-01-01T00:00:00Z' }),
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: 'usage test' },
+        cwd: '/home/carol'
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          usage: { input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 50 }
+        }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          usage: { input_tokens: 200, cache_read_input_tokens: 1800, output_tokens: 75 }
+        }
+      })
+    ]
+  });
+  assert.strictEqual(readLastUsage(usageFile), 2075, 'reads the last usage entry');
+
+  const noUsage = writeSession('-home-dave', '55555555-5555-4555-8555-555555555555', {
+    cwd: '/home/dave',
+    mtime: now - 5_000
+  });
+  assert.strictEqual(readLastUsage(noUsage), null, 'returns null without usage');
 
   console.log('sessions tests passed');
 } finally {

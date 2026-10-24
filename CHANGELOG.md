@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.6] - 2026-10-24
+
+### Fixed
+
+- `/status` now shows a resumed session's last known context immediately after
+  `/resume` instead of the bot's previous-session value. It is read from the
+  session file and labeled `last known from session` until the next bot turn.
+- `/new` and `/cwd` reset context usage, so a fresh session no longer displays
+  the old session's percentage.
+- `/status` labels context as `bot session` when it comes from the bot's own
+  last completed turn.
+
+### Added
+
+- `readLastUsage` in `src/sessions.js`, with unit tests.
+
 ## [0.4.5] - 2026-10-24
 
 ### Added
@@ -152,7 +168,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.5...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.6...HEAD
+[0.4.6]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.2...v0.4.3
