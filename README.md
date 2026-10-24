@@ -21,6 +21,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - 💰 **Cost tracking** — `/cost` reads `total_cost_usd` from Zero's JSON output.
 - 🔒 **Owner allowlist** — every update is checked against `allowedChatIds`.
 - ♻️ **Supervisor** — `scripts/start.sh` keeps the bridge alive and restarts it on exit.
+- 🔁 **Auto-start** — optional Zero CLI `SessionStart` hook starts the bridge on every launch or resume.
 
 ## Requirements
 
@@ -83,6 +84,34 @@ node src/bridge.js
 ```
 
 Open the chat, send `/start`, then just talk to the agent.
+
+### 4. Auto-start with Zero CLI (recommended)
+
+If the bridge dies whenever you close your terminal, add a user-level `SessionStart` hook. Zero runs it on every new session, resume, clear, and compact:
+
+`~/.zero/settings.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/zero-telegram-bridge/hooks/session-start.sh </dev/null >/dev/null 2>&1 || true",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The hook calls `scripts/start.sh`, which is idempotent: it checks the PID **and** the process command line, so it is a no-op while the bridge is already running. Hooks are skipped in `--bare` mode and when hooks are disabled.
+
+If your host tears down every process when the CLI exits, the bridge will stop with the CLI; the hook simply starts it again on the next launch. For a bridge that is independent of Zero, run it with systemd instead (see below).
 
 ## Configuration
 

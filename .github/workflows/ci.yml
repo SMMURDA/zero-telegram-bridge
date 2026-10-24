@@ -19,3 +19,4 @@ jobs:
           sh -n scripts/start.sh
           sh -n scripts/stop.sh
           sh -n scripts/supervise.sh
+          sh -n hooks/session-start.sh
