@@ -164,61 +164,80 @@ function readLastUsage(file) {
 }
 
 /**
- * Detect an interactive Zero CLI process in a given working directory.
- * The bot's own `zero -p` children are ignored: they are non-interactive and
- * their stdin is not a TTY.
+ * Detect whether one exact session is open in a live interactive Zero CLI.
+ *
+ * Zero writes ~/.zero/sessions/<pid>.json for active sessions, including the
+ * sessionId, so this is an exact match. Stale registry entries are ignored by
+ * checking that the PID is still alive.
  */
-function findActiveTerminal(cwd) {
-  if (!cwd) return null;
-  let target;
+function isInteractiveZeroProcess(pid) {
+  let cmdline;
   try {
-    target = path.resolve(cwd);
+    cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+      .replace(/\0/g, ' ')
+      .trim();
+  } catch (_) {
+    // /proc is unavailable (e.g. macOS): trust the registry entry.
+    return true;
+  }
+
+  if (!cmdline) return false;
+  if (/(^|\s)(-p|--print)(\s|$)/.test(cmdline)) return false;
+  if (!cmdline.includes('_cli.js') && !cmdline.includes('zero-cli')) return false;
+
+  let stdin = '';
+  try {
+    stdin = fs.readlinkSync(`/proc/${pid}/fd/0`);
+  } catch (_) {}
+  if (stdin && !/^\/dev\/(pts\/|tty)/.test(stdin)) return false;
+
+  return true;
+}
+
+function findActiveSession(home, sessionId, options = {}) {
+  const verifyProcess = options.verifyProcess !== false;
+  if (!sessionId) return null;
+
+  const registry = path.join(home, '.zero', 'sessions');
+  let names;
+  try {
+    names = fs.readdirSync(registry);
   } catch (_) {
     return null;
   }
 
-  let entries;
-  try {
-    entries = fs.readdirSync('/proc');
-  } catch (_) {
-    return null;
-  }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
 
-  for (const name of entries) {
-    if (!/^\d+$/.test(name)) continue;
-    const pid = Number(name);
-    if (pid === process.pid) continue;
-
-    let cmdline;
+    let entry;
     try {
-      cmdline = fs.readFileSync(`/proc/${name}/cmdline`, 'utf8')
-        .replace(/\0/g, ' ')
-        .trim();
+      entry = JSON.parse(fs.readFileSync(path.join(registry, name), 'utf8'));
     } catch (_) {
       continue;
     }
 
-    if (!cmdline.includes('zero-cli')) continue;
-    // `-p`/`--print` is the bot's one-shot child, not an interactive session.
-    if (/(^|\s)(-p|--print)(\s|$)/.test(cmdline)) continue;
+    if (!entry || entry.sessionId !== sessionId) continue;
 
-    let stdin;
+    const pid = Number(entry.pid) || Number(name.replace(/\.json$/, ''));
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+
     try {
-      stdin = fs.readlinkSync(`/proc/${name}/fd/0`);
-    } catch (_) {
-      continue;
+      process.kill(pid, 0);
+    } catch (error) {
+      // EPERM means the process exists but belongs to another user.
+      if (error.code !== 'EPERM') continue;
     }
-    if (!/^\/dev\/(pts\/|tty)/.test(stdin)) continue;
 
-    let processCwd;
-    try {
-      processCwd = fs.readlinkSync(`/proc/${name}/cwd`);
-    } catch (_) {
-      continue;
-    }
-    if (path.resolve(processCwd) !== target) continue;
+    if (entry.kind && entry.kind !== 'interactive') continue;
+    if (verifyProcess && !isInteractiveZeroProcess(pid)) continue;
 
-    return { pid, cmdline };
+    return {
+      pid,
+      cwd: entry.cwd || null,
+      kind: entry.kind || 'interactive',
+      entrypoint: entry.entrypoint || 'cli',
+      startedAt: entry.startedAt || null
+    };
   }
 
   return null;
@@ -262,8 +281,9 @@ function findSessionById(home, id) {
 
 module.exports = {
   discoverSessions,
-  findActiveTerminal,
+  findActiveSession,
   findSessionById,
+  isInteractiveZeroProcess,
   readLastUsage,
   readSessionMeta,
   extractTitle

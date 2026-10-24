@@ -27,7 +27,7 @@ const { spawn, execFile } = require('child_process');
 const { toTelegramHtml, splitMarkdown } = require('./markdown');
 const {
   discoverSessions,
-  findActiveTerminal,
+  findActiveSession,
   findSessionById,
   readLastUsage
 } = require('./sessions');
@@ -1032,9 +1032,10 @@ function activateResume(s, meta) {
 
 function resumeWarningText(meta, active) {
   const title = oneLine(String(meta.title || '').replace(/`/g, "'"), 80);
-  return `⚠️ **Active terminal session detected**\n\n` +
-    `Zero CLI is running in \`${displayCwd(meta.cwd)}\` (pid ${active.pid}).\n\n` +
-    `Resuming \`${meta.id.slice(0, 8)}\`${title ? ` — ${title}` : ''} from Telegram can conflict with that terminal: both may write to the same session, and the bot agent will see the terminal context.\n\n` +
+  return `⚠️ **This session is active in a terminal**\n\n` +
+    `The same session \`${meta.id.slice(0, 8)}\`${title ? ` — ${title}` : ''} is open in a terminal ` +
+    `(pid ${active.pid}, \`${displayCwd(active.cwd || meta.cwd)}\`).\n\n` +
+    `Resuming it from Telegram can conflict: both processes may write to the same session, and the bot agent will see the terminal context.\n\n` +
     'Recommended: finish or close the terminal session first.';
 }
 
@@ -1249,7 +1250,7 @@ async function handleCommand(chatId, text, s) {
         return send(chatId, 'Session not found across projects. Use /resume to list.');
       }
 
-      const active = findActiveTerminal(meta.cwd);
+      const active = findActiveSession(HOME, meta.id);
       if (active) {
         s.pendingResume = { id: meta.id, cwd: meta.cwd, at: Date.now() };
         saveState();
@@ -1646,7 +1647,7 @@ async function handleCallback(cq) {
         return;
       }
 
-      const active = findActiveTerminal(meta.cwd);
+      const active = findActiveSession(HOME, meta.id);
       if (active) {
         s.pendingResume = { id, cwd: meta.cwd, at: Date.now() };
         saveState();

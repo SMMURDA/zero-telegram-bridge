@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.4.8] - 2026-10-24
+
+### Changed
+
+- The resume guard now matches the exact session ID using Zero's
+  `~/.zero/sessions/<pid>.json` registry. A terminal session in the same
+  project no longer triggers a warning for a different session.
+- The guard verifies the PID is a live interactive Zero CLI before warning,
+  excluding the bot's own `-p` children.
+
+### Fixed
+
+- The bot's headless `-p` children register with `kind: "interactive"`; they no
+  longer cause false active-session warnings.
+
 ## [0.4.7] - 2026-10-24
 
 ### Added
@@ -183,7 +198,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.7...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.8...HEAD
+[0.4.8]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.4...v0.4.5

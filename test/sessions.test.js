@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const {
   discoverSessions,
+  findActiveSession,
   findSessionById,
   readLastUsage,
   readSessionMeta
@@ -128,6 +129,63 @@ try {
     mtime: now - 5_000
   });
   assert.strictEqual(readLastUsage(noUsage), null, 'returns null without usage');
+
+  const registry = path.join(tmp, '.zero', 'sessions');
+  fs.mkdirSync(registry, { recursive: true });
+  fs.writeFileSync(
+    path.join(registry, `${process.pid}.json`),
+    JSON.stringify({
+      pid: process.pid,
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      cwd: '/home/alice',
+      kind: 'interactive',
+      entrypoint: 'cli'
+    })
+  );
+  const active = findActiveSession(
+    tmp,
+    '11111111-1111-4111-8111-111111111111',
+    { verifyProcess: false }
+  );
+  assert.ok(active, 'detects the exact active session');
+  assert.strictEqual(active.pid, process.pid);
+  assert.strictEqual(active.cwd, '/home/alice');
+  assert.strictEqual(findActiveSession(
+    tmp,
+    '22222222-2222-4222-8222-222222222222',
+    { verifyProcess: false }
+  ), null);
+
+  if (process.platform === 'linux') {
+    // The test runner is Node, not an interactive Zero CLI.
+    assert.strictEqual(
+      findActiveSession(tmp, '11111111-1111-4111-8111-111111111111'),
+      null,
+      'rejects non-interactive processes'
+    );
+  }
+
+  fs.writeFileSync(
+    path.join(registry, '999999.json'),
+    JSON.stringify({
+      pid: 999999,
+      sessionId: 'dead-session',
+      cwd: '/home/dead',
+      kind: 'interactive'
+    })
+  );
+  assert.strictEqual(findActiveSession(tmp, 'dead-session'), null, 'ignores dead PIDs');
+
+  fs.writeFileSync(
+    path.join(registry, 'print.json'),
+    JSON.stringify({
+      pid: process.pid,
+      sessionId: 'print-session',
+      cwd: '/home/print',
+      kind: 'print'
+    })
+  );
+  assert.strictEqual(findActiveSession(tmp, 'print-session'), null, 'ignores non-interactive entries');
 
   console.log('sessions tests passed');
 } finally {
