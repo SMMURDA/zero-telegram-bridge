@@ -151,8 +151,9 @@ function thinkingLanguagePrompt(s) {
 }
 
 // A user-turn hint works more reliably than the system prompt alone for
-// reasoning models. Slash commands are left untouched so /compact and skills
-// still parse correctly.
+// reasoning models. It goes after the user's text so Zero reads the real
+// message as the session title. Slash commands are left untouched so /compact
+// and skills still parse correctly.
 function thinkingLanguageHint(s) {
   const lang = thinkingLanguage(s);
   if (!lang) return '';
@@ -169,7 +170,7 @@ function thinkingLanguageHint(s) {
 function promptWithThinkingLanguage(prompt, s) {
   if (String(prompt || '').trimStart().startsWith('/')) return prompt;
   const hint = thinkingLanguageHint(s);
-  return hint ? `${hint}\n\n${prompt}` : prompt;
+  return hint ? `${prompt}\n\n${hint}` : prompt;
 }
 
 const KB = {

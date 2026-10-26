@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.10.2] - 2026-10-26
+
+### Fixed
+
+- Session titles no longer repeat the thinking-language hint for every Telegram
+  session. The hint is appended after the user's message instead of before it,
+  so Zero stores the real message as the first user turn and uses it as the
+  session title.
+- Existing sessions are listed with the hint stripped as well, so `/sessions`
+  and `/resume` show readable titles for history created before this release
+  without rewriting any session file.
+- Unrelated bracketed prefixes such as `[INFO]` are left untouched, so only the
+  bridge's own thinking-language hints are removed.
+
+### Changed
+
+- The thinking-language instruction now trails the prompt. Reasoning models
+  still receive it in the same user turn, while the beginning of the turn stays
+  clean for titles and previews.
+
 ## [0.10.1] - 2026-10-24
 
 ### Fixed
@@ -331,7 +351,9 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.1...v0.10.2
+[0.10.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.5.0...v0.10.1
 [0.5.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.9...v0.5.0
 [0.4.9]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.7...v0.4.8

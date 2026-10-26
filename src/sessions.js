@@ -6,6 +6,12 @@ const path = require('path');
 const META_BYTES = 64 * 1024;
 const MAX_READS = 200;
 
+// The bridge prepends a thinking-language hint to every prompt. Zero stores the
+// full prompt as the first user turn, so without stripping it every Telegram
+// session would share the same title.
+const INJECTED_HINT =
+  /^\s*\[(?:ATURAN WAJIB|IMPORTANT|PENTING):\s*(?:Seluruh proses berpikir|Tulis semua proses berpikir|Write all internal thinking)[^\]]*\]\s*/i;
+
 function extractTitle(content) {
   let text = '';
   if (typeof content === 'string') {
@@ -20,6 +26,7 @@ function extractTitle(content) {
   if (/^<(local-command-caveat|command-name|local-command-stdout|command-message)/.test(text)) {
     return '';
   }
+  text = text.replace(INJECTED_HINT, '').trim();
   return text;
 }
 

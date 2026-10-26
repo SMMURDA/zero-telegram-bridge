@@ -92,6 +92,71 @@ try {
   assert.strictEqual(limited.length, 1, 'respects the limit');
   assert.strictEqual(limited[0].id, '22222222-2222-4222-8222-222222222222');
 
+  const hinted = writeSession('-home-echo', '66666666-6666-4666-8666-666666666666', {
+    cwd: '/home/echo',
+    mtime: now - 1_000,
+    lines: [
+      JSON.stringify({ type: '_spec', started_at: '2026-01-01T00:00:00Z' }),
+      JSON.stringify({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        content: '[ATURAN WAJIB: Seluruh proses berpikir/internal thinking HARUS dalam ' +
+          'Bahasa Indonesia. Jangan menulis thinking dalam bahasa Inggris.]\n\n' +
+          'deploy worker cloudflare'
+      }),
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: 'ignored later turn' },
+        cwd: '/home/echo'
+      })
+    ]
+  });
+  assert.strictEqual(
+    readSessionMeta(hinted).title,
+    'deploy worker cloudflare',
+    'thinking-language hint is stripped from the title'
+  );
+
+  const hintedEn = writeSession('-home-frank', '77777777-7777-4777-8777-777777777777', {
+    cwd: '/home/frank',
+    mtime: now - 500,
+    lines: [
+      JSON.stringify({ type: '_spec', started_at: '2026-01-01T00:00:00Z' }),
+      JSON.stringify({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: '[IMPORTANT: Write all internal thinking/reasoning in English. ' +
+            'The final answer must use the user\'s language.]\n\nfix the login page'
+        },
+        cwd: '/home/frank'
+      })
+    ]
+  });
+  assert.strictEqual(
+    readSessionMeta(hintedEn).title,
+    'fix the login page',
+    'English thinking-language hint is stripped from the title'
+  );
+
+  const bracketed = writeSession('-home-grace', '88888888-8888-4888-8888-888888888888', {
+    cwd: '/home/grace',
+    mtime: now - 400,
+    lines: [
+      JSON.stringify({ type: '_spec', started_at: '2026-01-01T00:00:00Z' }),
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: '[INFO] keep this title' },
+        cwd: '/home/grace'
+      })
+    ]
+  });
+  assert.strictEqual(
+    readSessionMeta(bracketed).title,
+    '[INFO] keep this title',
+    'unrelated bracket prefixes are left alone'
+  );
+
   const found = findSessionById(tmp, '11111111-1111-4111-8111-111111111111');
   assert.ok(found, 'finds an exact session ID');
   assert.strictEqual(found.cwd, '/home/alice');

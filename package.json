@@ -1,6 +1,6 @@
 {
   "name": "zero-telegram-bridge",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Two-way Telegram chat bridge for Zero CLI — chat with your terminal agent from Telegram.",
   "main": "src/bridge.js",
   "bin": {
