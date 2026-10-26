@@ -25,6 +25,7 @@ const path = require('path');
 const https = require('https');
 const { spawn, execFile } = require('child_process');
 const { toTelegramHtml, splitMarkdown, escapeHtml } = require('./markdown');
+const { extractFileMarkers, isImageFile, buildMultipart } = require('./files');
 const {
   discoverSessions,
   findActiveSession,
@@ -51,6 +52,10 @@ const LOG_PATH = path.join(RUNTIME_DIR, 'bridge.log');
 
 const HOME = process.env.HOME || '/home/zero';
 const PROGRESS_MODES = ['full', 'messages', 'stream', 'off'];
+const MAX_QUEUE = 50;
+const SESSION_PAGE_SIZE = 10;
+const SESSION_LIST_LIMIT = 60;
+const BTW_TIMEOUT_MS = 5 * 60 * 1000;
 
 let fileConfig = {};
 try {
@@ -122,7 +127,11 @@ const TYPING_MS = 4500;
 const TELEGRAM_SYSTEM_PROMPT =
   'You are running through Telegram. Never use AskUserQuestion or other ' +
   'interactive UI tools. If you need clarification, ask in plain text in ' +
-  'your final reply.';
+  'your final reply. To send a file or screenshot, end your final reply with ' +
+  'a marker block: one [[send-file:/absolute/path]] per line, with no text ' +
+  'after it. Relative paths resolve from the working directory. The marker ' +
+  'is removed and the file is uploaded separately. Never send secrets, ' +
+  'credentials, or the bridge configuration file.';
 
 function thinkingLanguage(s) {
   const raw = String((s && s.thinkingLanguage) || '').trim();
@@ -184,20 +193,30 @@ const KB = {
   stop: '⏹️ Stop',
   compact: '🗜️ Compact & Auto',
   settings: '⚙️ Settings',
+  queue: '📋 Queue',
+  btw: '💭 BTW',
   help: '❓ Help'
 };
 
-const MAIN_KEYBOARD = {
-  keyboard: [
-    [{ text: KB.newSession }, { text: KB.sessions }, { text: KB.resume }],
-    [{ text: KB.model }, { text: KB.effort }, { text: KB.cwd }],
-    [{ text: KB.status }, { text: KB.settings }, { text: KB.stop }],
-    [{ text: KB.compact }, { text: KB.help }]
-  ],
-  resize_keyboard: true,
-  is_persistent: true,
-  input_field_placeholder: 'Type a message or pick a menu…'
-};
+// Reply keyboards cannot be edited in place. They are refreshed whenever the
+// bridge sends a message, so the count can be stale while a job is running.
+// The activity message carries the live count and an inline Queue button.
+function mainKeyboard(includeActive = true) {
+  const depth = queueDepth(includeActive);
+  const queueLabel = depth > 0 ? `${KB.queue} (${depth})` : KB.queue;
+  return {
+    keyboard: [
+      [{ text: KB.newSession }, { text: KB.sessions }, { text: KB.resume }],
+      [{ text: KB.model }, { text: KB.effort }, { text: KB.cwd }],
+      [{ text: KB.status }, { text: KB.settings }, { text: KB.stop }],
+      [{ text: queueLabel }, { text: KB.btw }],
+      [{ text: KB.compact }, { text: KB.help }]
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    input_field_placeholder: 'Type a message or pick a menu…'
+  };
+}
 
 const KEYBOARD_MAP = {
   [KB.newSession]: '/new',
@@ -210,6 +229,8 @@ const KEYBOARD_MAP = {
   [KB.stop]: '/stop',
   [KB.compact]: '/compactmenu',
   [KB.settings]: '/settings',
+  [KB.queue]: '/queue',
+  [KB.btw]: '/btw',
   [KB.help]: '/help',
   // Legacy reply keyboards cached by Telegram clients.
   '💰 Cost': '/cost',
@@ -229,6 +250,8 @@ const BOT_COMMANDS = [
   { command: 'progress', description: '💬 Progress display mode' },
   { command: 'settings', description: '⚙️ Settings menu' },
   { command: 'status', description: '📊 Bridge status & queue' },
+  { command: 'queue', description: '📋 View or clear the job queue' },
+  { command: 'btw', description: '💭 Quick side question in a read-only run' },
   { command: 'model', description: '🧠 View or set model' },
   { command: 'effort', description: '⚙️ View or set effort' },
   { command: 'cwd', description: '📁 Working directory' },
@@ -267,6 +290,7 @@ const HELP = `📖 ZERO HELP
 💬 Chat
 • Send a normal message — the agent replies and can use tools
 • 📎 Photo / document / voice — downloaded and analyzed
+• 📤 File output — the agent can attach files with [[send-file:/path]]
 • ↩️ Reply to a message — its quote is included
 • !command — run a shell command in the working directory (e.g. !ls -la)
 
@@ -278,6 +302,8 @@ const HELP = `📖 ZERO HELP
 /compact [instructions] — summarize now
 /compactmenu — Compact & Auto menu (also the keyboard button)
 /status — model, effort, folder, queue, cost, context
+/queue — view, remove, or clear queued jobs
+/btw <question> — quick side question in a read-only run (does not alter this chat)
 /stop — interrupt the running task (SIGINT) and clear the queue
 
 🧠 Settings
@@ -313,9 +339,13 @@ try {
 if (!state.sessions) state.sessions = {};
 
 let jobQueue = [];
+let jobSeq = 0;
 let processing = false;
 let activeJob = null;
+let activeProgress = null;
 let stopped = false;
+const btwJobs = new Map();
+const btwCancelled = new Set();
 const startedAt = Date.now();
 
 function log(...args) {
@@ -458,6 +488,125 @@ async function api(method, params = {}, attempt = 1) {
   }
 }
 
+const MIME_TYPES = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.pdf': 'application/pdf',
+  '.json': 'application/json',
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.log': 'text/plain',
+  '.zip': 'application/zip'
+};
+
+function mimeFor(file) {
+  return MIME_TYPES[path.extname(String(file || '')).toLowerCase()] || 'application/octet-stream';
+}
+
+// Uploads are intentionally single-shot: retrying a partially delivered file
+// could post it twice. Callers log the error and continue with the job.
+function telegramUpload(method, fields, file, timeoutSec = 180) {
+  return new Promise((resolve, reject) => {
+    const { boundary, body } = buildMultipart(fields, file);
+    const req = https.request({
+      hostname: 'api.telegram.org',
+      port: 443,
+      path: `/bot${config.token}/${method}`,
+      method: 'POST',
+      agent: false,
+      headers: {
+        'content-type': `multipart/form-data; boundary=${boundary}`,
+        'content-length': body.length
+      }
+    }, res => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { if (raw.length < 8 * 1024 * 1024) raw += chunk; });
+      res.on('end', () => {
+        let parsed;
+        try { parsed = JSON.parse(raw); } catch (_) {
+          return reject(new Error(`${method}: invalid JSON (HTTP ${res.statusCode})`));
+        }
+        if (!parsed.ok) return reject(new ApiError(method, parsed));
+        resolve(parsed.result);
+      });
+    });
+    req.setTimeout(timeoutSec * 1000, () => {
+      req.destroy(Object.assign(new Error(`${method}: ETIMEDOUT`), { code: 'ETIMEDOUT' }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+}
+
+function isProtectedSendPath(file) {
+  const real = candidate => {
+    try { return fs.realpathSync(candidate); } catch (_) { return candidate; }
+  };
+  const protectedPaths = [
+    CONFIG_PATH,
+    STATE_PATH,
+    LOG_PATH,
+    path.join(HOME, '.git-credentials')
+  ].map(real);
+  return protectedPaths.includes(real(file));
+}
+
+async function sendFileToTelegram(chatId, rawPath, s) {
+  const requested = String(rawPath || '').trim();
+  if (!requested) return false;
+
+  const expanded = requested.replace(/^~(?=$|\/)/, HOME);
+  const target = path.resolve(s.cwd, expanded);
+
+  let stat;
+  try {
+    stat = fs.statSync(target);
+  } catch (_) {
+    await send(chatId, `⚠️ Cannot send file (not found): ${requested}`);
+    return false;
+  }
+  if (!stat.isFile()) {
+    await send(chatId, `⚠️ Cannot send (not a regular file): ${requested}`);
+    return false;
+  }
+  if (isProtectedSendPath(target)) {
+    await send(chatId, '⚠️ Refusing to send a protected bridge file.');
+    return false;
+  }
+  if (stat.size > config.maxFileBytes) {
+    await send(chatId,
+      `⚠️ File too large to send: ${path.basename(target)} ` +
+      `(${stat.size} bytes, limit ${config.maxFileBytes}).`);
+    return false;
+  }
+
+  const name = path.basename(target);
+  const image = isImageFile(name) && stat.size <= 10 * 1024 * 1024;
+  const method = image ? 'sendPhoto' : 'sendDocument';
+  const field = image ? 'photo' : 'document';
+
+  try {
+    await telegramUpload(method, {
+      chat_id: chatId,
+      caption: clip(name, 200)
+    }, {
+      field,
+      filename: name,
+      mime: mimeFor(name),
+      data: fs.readFileSync(target)
+    });
+    return true;
+  } catch (e) {
+    log('send file failed:', e.message);
+    await send(chatId, redact(`⚠️ Failed to send ${name}: ${e.message}`).slice(0, 500));
+    return false;
+  }
+}
+
 let commandsSynced = false;
 async function syncCommands() {
   if (commandsSynced) return;
@@ -493,7 +642,9 @@ async function send(chatId, text, extra = {}) {
 }
 
 async function sendFormatted(chatId, markdown, extra = {}) {
-  const chunks = splitMarkdown(String(markdown == null ? '' : markdown), 2800);
+  const parsed = extractFileMarkers(String(markdown == null ? '' : markdown));
+  if (!parsed.text && parsed.files.length) return; // Marker-only step: files are sent by the job.
+  const chunks = splitMarkdown(parsed.text || '(no output)', 2800);
   if (!chunks.length) chunks.push('(no output)');
 
   for (const chunk of chunks) {
@@ -712,7 +863,8 @@ function createStreamProgress(chatId) {
         chat_id: chatId,
         text: '🧠 <b>Working…</b>',
         parse_mode: 'HTML',
-        disable_web_page_preview: true
+        disable_web_page_preview: true,
+        reply_markup: queueInlineKeyboard()
       }).then(m => {
         msg = m;
         return true;
@@ -746,9 +898,10 @@ function createStreamProgress(chatId) {
     return text;
   };
 
-  const render = () => build(`🧠 <b>Working…</b> ${elapsed()}s`);
+  const render = () =>
+    build(`🧠 <b>Working…</b> ${elapsed()}s · 📋 ${queueDepth(true)}`);
 
-  const edit = text => {
+  const edit = (text, markup = queueInlineKeyboard()) => {
     if (!msg) return Promise.resolve();
     chain = chain.then(async () => {
       try {
@@ -757,7 +910,8 @@ function createStreamProgress(chatId) {
           message_id: msg.message_id,
           text,
           parse_mode: 'HTML',
-          disable_web_page_preview: true
+          disable_web_page_preview: true,
+          reply_markup: markup
         });
       } catch (e) {
         if (/not modified/i.test(e.message)) return;
@@ -768,7 +922,8 @@ function createStreamProgress(chatId) {
             chat_id: chatId,
             message_id: msg.message_id,
             text: stripHtml(text),
-            disable_web_page_preview: true
+            disable_web_page_preview: true,
+            reply_markup: markup
           });
         } catch (e2) {
           log('progress plain edit failed:', e2.message);
@@ -799,6 +954,9 @@ function createStreamProgress(chatId) {
 
   return {
     addText() {},
+    refresh() {
+      if (msg && !closed) schedule();
+    },
     addThinking(text) {
       if (closed) return;
       const raw = String(text || '').trim();
@@ -837,7 +995,7 @@ function createStreamProgress(chatId) {
       else if (opts.status === 'stopped') header = `⏹️ <b>Stopped</b> after ${secs}s`;
       else if (opts.status === 'timeout') header = `⏱️ <b>Timed out</b> after ${secs}s`;
       else header = `❌ <b>Failed</b> after ${secs}s`;
-      await edit(build(header));
+      await edit(build(header), { inline_keyboard: [] });
     }
   };
 }
@@ -905,6 +1063,7 @@ function createActivityProgress(chatId, options = {}) {
     },
     getLastText() { return lastText; },
     getLastTextOk() { return lastTextOk; },
+    refresh() { activity.refresh(); },
     async flush() {
       await chain;
       await activity.flush();
@@ -925,6 +1084,7 @@ function createProgress(chatId, mode = 'messages') {
       addTool() {},
       getLastText() { return ''; },
       getLastTextOk() { return false; },
+      refresh() {},
       async flush() {},
       async finish() {}
     };
@@ -1038,6 +1198,10 @@ function runZero(prompt, s, onChild, control) {
       if (!line.startsWith('{')) return;
       let evt;
       try { evt = JSON.parse(line); } catch (_) { return; }
+
+      // Every stream-json event carries the live session ID. Keep it on the
+      // control object so /btw can read the exact conversation in flight.
+      if (evt.session_id && control) control.sessionId = evt.session_id;
 
       if (evt.type === 'assistant' && evt.message && Array.isArray(evt.message.content)) {
         const content = evt.message.content;
@@ -1229,7 +1393,7 @@ async function runCompact(chatId, s, instructions = '') {
   const control = { stop: false, stream: false };
   const result = await new Promise((resolve, reject) => {
     runZero(prompt, s, child => {
-      activeJob = { child, control, chatId, startedAt: Date.now() };
+      activeJob = { child, control, chatId, startedAt: Date.now(), label: 'compact', kind: 'compact' };
     }, control).then(resolve, reject);
   });
 
@@ -1242,6 +1406,138 @@ async function runCompact(chatId, s, instructions = '') {
   s.autoCompactFailedAt = 0;
   saveState();
   return result;
+}
+
+function latestSessionForCwd(cwd) {
+  return discoverSessions(HOME, SESSION_LIST_LIMIT).find(session => session.cwd === cwd) || null;
+}
+
+function btwArgs(question, s, sessionId) {
+  return [
+    '-p', '--output-format', 'json',
+    '--dangerously-skip-permissions',
+    '--model', s.model,
+    '--effort', s.effort,
+    '--disallowedTools', 'AskUserQuestion',
+    '--append-system-prompt', TELEGRAM_SYSTEM_PROMPT + thinkingLanguagePrompt(s),
+    '-r', sessionId,
+    // Read the current conversation without writing a new session. A persisted
+    // fork would clutter /sessions and could be picked as the next BTW source.
+    '--no-session-persistence',
+    '--', promptWithThinkingLanguage(question, s)
+  ];
+}
+
+function runBtwZero(args, cwd, onChild) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(config.zeroBin, args, {
+      cwd,
+      env: {
+        ...process.env,
+        HOME,
+        NO_COLOR: '1',
+        ZERO_BRIDGE_CHILD: '1',
+        DISABLE_AUTO_COMPACT: '1'
+      },
+      detached: true,
+      timeout: BTW_TIMEOUT_MS,
+      maxBuffer: 32 * 1024 * 1024
+    }, (err, stdout, stderr) => {
+      const parsed = parseResult(stdout || '');
+      if (parsed) {
+        if (parsed.is_error) {
+          return reject(Object.assign(
+            new Error(parsed.result || 'Zero returned an error'),
+            { code: 'ZERO_ERROR', parsed }
+          ));
+        }
+        return resolve({
+          text: typeof parsed.result === 'string' ? parsed.result : JSON.stringify(parsed.result),
+          parsed
+        });
+      }
+      if (err) {
+        if (err.killed) {
+          // Make sure tool subprocesses in the detached group also stop.
+          killTree(child, 'SIGTERM');
+          return reject(Object.assign(new Error('timeout'), { code: 'TIMEOUT' }));
+        }
+        const detail = (stderr || stdout || err.message || '').trim();
+        return reject(Object.assign(new Error(detail || 'btw failed'), { code: 'NO_RESULT' }));
+      }
+      reject(Object.assign(new Error('btw returned no result'), { code: 'NO_RESULT' }));
+    });
+    if (onChild) onChild(child);
+  });
+}
+
+// A BTW run is read-only: spend is tracked, but the chat's cost/session
+// pointer, context counters, and resume state are untouched.
+function addOneOffCost(s, parsed) {
+  const total = parsed && typeof parsed.total_cost_usd === 'number' ? parsed.total_cost_usd : 0;
+  if (!(total > 0)) return;
+  s.spent = (s.spent || 0) + total;
+  s.lastCallCost = total;
+  saveState();
+}
+
+async function runBtw(chatId, s, question) {
+  const prompt = String(question || '').trim();
+  if (!prompt) {
+    return send(chatId,
+      '💭 Usage: /btw <question>\nExample: /btw what does this error mean?');
+  }
+
+  const key = String(chatId);
+  if (btwJobs.has(key)) {
+    return send(chatId, '💭 A BTW question is already running. Wait for it or use /stop.');
+  }
+
+  const latest = latestSessionForCwd(s.cwd);
+  const inFlight = activeJob && activeJob.control && activeJob.control.sessionId;
+  // Prefer the session the user explicitly resumed, then the session ID Zero
+  // reported for the in-flight job, then the last completed bot session.
+  // Never resurrect a session after /new when nothing has run yet.
+  const sessionId =
+    s.resumeId ||
+    inFlight ||
+    s.lastSessionId ||
+    (activeJob && latest && latest.id) ||
+    (!s.newSession && latest && latest.id) ||
+    null;
+  if (!sessionId) {
+    return send(chatId, '💭 No session yet. Send a regular message first.');
+  }
+
+  const stopTyping = typingLoop(chatId);
+  try {
+    const result = await runBtwZero(btwArgs(prompt, s, sessionId), s.cwd, child => {
+      btwJobs.set(key, child);
+    });
+    addOneOffCost(s, result.parsed);
+
+    const parsed = extractFileMarkers(result.text);
+    const cost = result.parsed && typeof result.parsed.total_cost_usd === 'number'
+      ? `\n\n_btw cost: ${fmtCost(result.parsed.total_cost_usd)}_`
+      : '';
+    await sendFormatted(chatId, `💭 **BTW**\n\n${parsed.text || '(no output)'}${cost}`);
+    for (const file of parsed.files) {
+      await sendFileToTelegram(chatId, file, s);
+    }
+  } catch (e) {
+    if (btwCancelled.has(key)) {
+      // /stop already reported the interruption; stay quiet here.
+    } else if (e.code === 'TIMEOUT') {
+      await send(chatId, `⏱️ BTW timed out after ${fmtDuration(BTW_TIMEOUT_MS)}.`);
+    } else {
+      log('btw failed:', e.message);
+      await send(chatId, redact(`❌ BTW failed: ${e.message}`).slice(0, 1000));
+    }
+  } finally {
+    stopTyping();
+    btwJobs.delete(key);
+    btwCancelled.delete(key);
+  }
 }
 
 async function maybeAutoCompact(chatId, s) {
@@ -1618,13 +1914,46 @@ function shortSessionLabel(x) {
   return clip(`▶️ ${x.index}. ${date} · ${project} · ${title}`, 60);
 }
 
-function sessionsKeyboard(list) {
-  const rows = list.slice(0, 12).map(x => [{
+function sessionsKeyboard(slice, page, pages, mode) {
+  const rows = slice.map(x => [{
     text: shortSessionLabel(x),
     callback_data: `resume:${x.id}`
   }]);
+
+  const nav = [];
+  if (page > 0) {
+    nav.push({ text: '⬅️ Newer', callback_data: `sesspage:${mode}:${page - 1}` });
+  }
+  if (page < pages - 1) {
+    nav.push({ text: 'Older ➡️', callback_data: `sesspage:${mode}:${page + 1}` });
+  }
+  if (nav.length) rows.push(nav);
+
   rows.push([{ text: '🆕 Start a new session', callback_data: 'new' }]);
   return { inline_keyboard: rows };
+}
+
+async function showSessionPicker(chatId, mode = 'sessions', page = 0, editMessageId = null) {
+  const list = discoverSessions(HOME, SESSION_LIST_LIMIT);
+  if (!list.length) {
+    return send(chatId, 'No sessions found in any project yet.');
+  }
+
+  const pages = Math.max(1, Math.ceil(list.length / SESSION_PAGE_SIZE));
+  const current = Math.max(0, Math.min(pages - 1, Number(page) || 0));
+  const slice = list.slice(
+    current * SESSION_PAGE_SIZE,
+    (current + 1) * SESSION_PAGE_SIZE
+  );
+
+  const title = mode === 'resume'
+    ? '⏪ Pick a session to resume.'
+    : '🗂️ Recent sessions across all projects';
+  const body = `${title}\n` +
+    `Page ${current + 1}/${pages} · newest first. ` +
+    'Tap a session — it activates immediately.';
+
+  await showPanel(chatId, body, sessionsKeyboard(slice, current, pages, mode), editMessageId);
 }
 
 function compactMenu(s) {
@@ -1808,13 +2137,13 @@ async function handleCommand(chatId, text, s) {
 
   switch (cmd) {
     case '/start':
-      return send(chatId, WELCOME, { reply_markup: MAIN_KEYBOARD });
+      return send(chatId, WELCOME, { reply_markup: mainKeyboard() });
 
     case '/help':
-      return send(chatId, HELP, { reply_markup: MAIN_KEYBOARD });
+      return send(chatId, HELP, { reply_markup: mainKeyboard() });
 
     case '/menu':
-      return send(chatId, '🎛️ Keyboard menu shown.', { reply_markup: MAIN_KEYBOARD });
+      return send(chatId, '🎛️ Keyboard menu shown.', { reply_markup: mainKeyboard() });
 
     case '/settings':
       return showSettings(chatId, s);
@@ -1832,14 +2161,10 @@ async function handleCommand(chatId, text, s) {
 
     case '/resume': {
       if (!rest) {
-        const list = discoverSessions(HOME, 12);
-        if (!list.length) return send(chatId, 'No sessions found in any project yet.');
-        return send(chatId,
-          '⏪ Pick a session to resume.\nAcross all projects, newest first. Tap a session — it activates immediately.',
-          { reply_markup: sessionsKeyboard(list) });
+        return showSessionPicker(chatId, 'resume');
       }
 
-      const all = discoverSessions(HOME, 50);
+      const all = discoverSessions(HOME, SESSION_LIST_LIMIT);
       let meta;
       if (/^\d+$/.test(rest)) {
         meta = all[Number(rest) - 1];
@@ -1864,13 +2189,8 @@ async function handleCommand(chatId, text, s) {
       return send(chatId, `⏪ Next message will resume: ${meta.id}\n📁 ${meta.cwd}`);
     }
 
-    case '/sessions': {
-      const list = discoverSessions(HOME, 12);
-      if (!list.length) return send(chatId, 'No sessions found in any project yet.');
-      return send(chatId,
-        '🗂️ Recent sessions across all projects\nTap a button to activate a session immediately.',
-        { reply_markup: sessionsKeyboard(list) });
-    }
+    case '/sessions':
+      return showSessionPicker(chatId, 'sessions');
 
     case '/compactmenu':
       return showCompactMenu(chatId, s);
@@ -1924,6 +2244,12 @@ async function handleCommand(chatId, text, s) {
       return showProgress(chatId, s);
     }
 
+    case '/queue':
+      return showQueue(chatId);
+
+    case '/btw':
+      return runBtw(chatId, s, rest);
+
     case '/status': {
       const running = activeJob
         ? `yes (${fmtDuration(Date.now() - activeJob.startedAt)})`
@@ -1941,7 +2267,7 @@ async function handleCommand(chatId, text, s) {
         `session mode: ${mode}\n` +
         `last session: ${s.lastSessionId || '-'}\n` +
         `running: ${running}\n` +
-        `queue: ${jobQueue.length}\n` +
+        `queue: ${queueDepth(true)} (${jobQueue.length} waiting)\n` +
         `auto-compact: ${s.autoCompact ? 'ON' : 'OFF'} (${Math.round(s.autoCompactThreshold * 100)}%)\n` +
         `context: ${contextLine(s)}${s.contextSource === 'resumed'
           ? ' (last known from session)'
@@ -1987,19 +2313,31 @@ async function handleCommand(chatId, text, s) {
       );
 
     case '/stop': {
+      const btw = btwJobs.get(String(chatId));
+      if (btw) {
+        btwCancelled.add(String(chatId));
+        killTree(btw, 'SIGINT');
+        btwJobs.delete(String(chatId));
+      }
       if (!activeJob) {
         const queued = jobQueue.length;
         jobQueue = [];
-        return send(chatId, queued
-          ? `⏹️ Queue cleared (${queued} job${queued === 1 ? '' : 's'}).`
-          : 'No task is running.');
+        queueChanged();
+        const reply_markup = mainKeyboard(false);
+        if (queued) {
+          return send(chatId, `⏹️ Queue cleared (${queued} job${queued === 1 ? '' : 's'}).`,
+            { reply_markup });
+        }
+        return send(chatId, btw ? '⏹️ BTW interrupted.' : 'No task is running.', { reply_markup });
       }
       requestStop(activeJob);
       const queued = jobQueue.length;
       jobQueue = [];
+      queueChanged();
       return send(chatId,
-        `⏹️ Interrupting${queued ? ` and clearing ${queued} queued job${queued === 1 ? '' : 's'}` : ''}. ` +
-        'You can send your next message now.');
+        `⏹️ Interrupting${queued ? ` and clearing ${queued} queued job${queued === 1 ? '' : 's'}` : ''}` +
+        `${btw ? ' and stopping BTW' : ''}. You can send your next message now.`,
+        { reply_markup: mainKeyboard(false) });
     }
 
     case '/ping':
@@ -2037,9 +2375,95 @@ async function handleCommand(chatId, text, s) {
 }
 
 // ----------------------------------------------------------------------- Jobs
-function enqueue(chatId, prompt, label, kind = 'zero') {
-  jobQueue.push({ chatId, prompt, label, kind });
+function enqueue(chatId, prompt, label, kind = 'zero', options = {}) {
+  if (jobQueue.length >= MAX_QUEUE) {
+    send(chatId,
+      `⚠️ Queue is full (${MAX_QUEUE} jobs). Wait for the running job or use /stop.`)
+      .catch(e => log('queue notice failed:', e.message));
+    return null;
+  }
+
+  const job = { id: ++jobSeq, chatId, prompt, label, kind, queuedAt: Date.now() };
+  const busy = processing;
+  jobQueue.push(job);
+
+  if (busy && options.notify === true) {
+    send(chatId, `📋 Queued #${job.id} · position ${jobQueue.length} — ${oneLine(label, 80)}`,
+      { reply_markup: mainKeyboard(true) })
+      .catch(e => log('queue notice failed:', e.message));
+  }
+
   pump();
+  queueChanged();
+  return job;
+}
+
+function queueDepth(includeActive = true) {
+  const active = includeActive && (processing || activeJob) ? 1 : 0;
+  return active + jobQueue.length;
+}
+
+function queueInlineKeyboard() {
+  return {
+    inline_keyboard: [[{
+      text: `${KB.queue} (${queueDepth(true)})`,
+      callback_data: 'queue:open'
+    }]]
+  };
+}
+
+function queueChanged() {
+  if (!activeProgress || typeof activeProgress.refresh !== 'function') return;
+  try {
+    activeProgress.refresh();
+  } catch (e) {
+    log('queue refresh failed:', e.message);
+  }
+}
+
+function queueSnapshot() {
+  const now = Date.now();
+  const lines = [];
+  if (activeJob) {
+    lines.push(
+      `▶️ running: ${clip(oneLine(activeJob.label || activeJob.kind || 'job', 70), 70)} · ` +
+      `${fmtDuration(now - activeJob.startedAt)}`
+    );
+  } else if (processing) {
+    lines.push('▶️ running: shell');
+  } else {
+    lines.push('▶️ running: —');
+  }
+  lines.push(`⏳ waiting: ${jobQueue.length}`);
+  if (btwJobs.size) lines.push(`💭 btw: ${btwJobs.size} running`);
+  jobQueue.slice(0, 10).forEach((job, index) => {
+    const age = fmtDuration(Math.max(0, now - job.queuedAt));
+    lines.push(
+      `${index + 1}. #${job.id} · ${job.kind} · queued ${age} ago — ` +
+      `${clip(oneLine(job.label, 70), 70)}`
+    );
+  });
+  if (jobQueue.length > 10) lines.push(`… and ${jobQueue.length - 10} more`);
+  return lines.join('\n');
+}
+
+function queueMenu() {
+  const rows = jobQueue.slice(0, 10).map(job => [{
+    text: `🗑 #${job.id} ${clip(oneLine(job.label, 40), 40)}`,
+    callback_data: `queue:rm:${job.id}`
+  }]);
+  if (jobQueue.length) {
+    rows.push([{
+      text: `🧹 Clear all (${jobQueue.length})`,
+      callback_data: 'queue:clear'
+    }]);
+  }
+  rows.push([{ text: '🔄 Refresh', callback_data: 'queue:show' }]);
+  return { inline_keyboard: rows };
+}
+
+async function showQueue(chatId, editMessageId = null) {
+  await showPanel(chatId, `📋 Job queue\n\n${queueSnapshot()}`, queueMenu(), editMessageId);
 }
 
 async function pump() {
@@ -2048,6 +2472,7 @@ async function pump() {
   try {
     while (jobQueue.length && !stopped) {
       const job = jobQueue.shift();
+      queueChanged();
       await runJob(job);
     }
   } finally {
@@ -2078,10 +2503,18 @@ async function runJob(job) {
     }
 
     progress = createProgress(job.chatId, s.progressMode);
+    activeProgress = progress;
     const control = { stop: false, progress };
     const result = await new Promise((resolve, reject) => {
       runZero(job.prompt, s, child => {
-        activeJob = { child, control, chatId: job.chatId, startedAt: Date.now() };
+        activeJob = {
+          child,
+          control,
+          chatId: job.chatId,
+          startedAt: Date.now(),
+          label: job.label,
+          kind: job.kind
+        };
       }, control).then(resolve, reject);
     });
 
@@ -2091,8 +2524,9 @@ async function runJob(job) {
     s.resumeId = null;
     saveState();
 
-    let text = result.text;
-    if (!text || !text.trim()) text = '(no output)';
+    const extracted = extractFileMarkers(result.text);
+    let text = extracted.text;
+    if (!text.trim()) text = extracted.files.length ? '' : '(no output)';
     const denied = result.parsed && Array.isArray(result.parsed.permission_denials)
       ? result.parsed.permission_denials.length
       : 0;
@@ -2103,7 +2537,12 @@ async function runJob(job) {
     const finalAlreadySent = progress.getLastTextOk() &&
       normalize(text) === normalize(progress.getLastText());
     await progress.finish({ ok: true });
-    if (!finalAlreadySent) await sendFormatted(job.chatId, text);
+    if (!finalAlreadySent && text) {
+      await sendFormatted(job.chatId, text, { reply_markup: mainKeyboard(false) });
+    }
+    for (const file of extracted.files) {
+      await sendFileToTelegram(job.chatId, file, s);
+    }
     await maybeAutoCompact(job.chatId, s);
   } catch (e) {
     if (progress) {
@@ -2114,18 +2553,21 @@ async function runJob(job) {
           : 'error'
       });
     }
+    const reply_markup = mainKeyboard(false);
     if (e.code === 'STOPPED') {
-      await send(job.chatId, '⏹️ Cancelled.');
+      await send(job.chatId, '⏹️ Cancelled.', { reply_markup });
     } else if (e.code === 'TIMEOUT') {
       await send(job.chatId,
-        `⏱️ Timed out after ${fmtDuration(config.jobTimeoutMs)}. Try /stop and break the task into smaller steps.`);
+        `⏱️ Timed out after ${fmtDuration(config.jobTimeoutMs)}. Try /stop and break the task into smaller steps.`,
+        { reply_markup });
     } else {
       log('job failed:', e.message);
-      await send(job.chatId, `❌ Error: ${redact(e.message).slice(0, 3500)}`);
+      await send(job.chatId, `❌ Error: ${redact(e.message).slice(0, 3500)}`, { reply_markup });
     }
   } finally {
     stopTyping();
     activeJob = null;
+    activeProgress = null;
   }
 }
 
@@ -2154,6 +2596,53 @@ async function handleCallback(cq) {
   const s = sessionFor(chatId);
   const data = cq.data || '';
   try {
+    if (data.startsWith('queue:')) {
+      const action = data.slice('queue:'.length);
+      if (action === 'open') {
+        await api('answerCallbackQuery', { callback_query_id: cq.id });
+        return showQueue(chatId);
+      }
+      if (action === 'show') {
+        await api('answerCallbackQuery', { callback_query_id: cq.id });
+        return showQueue(chatId, msg.message_id);
+      }
+      if (action === 'clear') {
+        const before = jobQueue.length;
+        jobQueue = jobQueue.filter(job => String(job.chatId) !== String(chatId));
+        const removed = before - jobQueue.length;
+        queueChanged();
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: removed
+            ? `Cleared ${removed} queued job${removed === 1 ? '' : 's'}`
+            : 'Queue is already empty'
+        });
+        return showQueue(chatId, msg.message_id);
+      }
+      if (action.startsWith('rm:')) {
+        const id = Number(action.slice(3));
+        const index = jobQueue.findIndex(
+          job => job.id === id && String(job.chatId) === String(chatId)
+        );
+        if (index === -1) {
+          await api('answerCallbackQuery', {
+            callback_query_id: cq.id,
+            text: 'That job is no longer queued'
+          });
+          return showQueue(chatId, msg.message_id);
+        }
+        const [removed] = jobQueue.splice(index, 1);
+        queueChanged();
+        await api('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: `Removed #${removed.id}`
+        });
+        return showQueue(chatId, msg.message_id);
+      }
+      await api('answerCallbackQuery', { callback_query_id: cq.id });
+      return;
+    }
+
     if (data.startsWith('settings:')) {
       const panel = data.slice('settings:'.length);
       await api('answerCallbackQuery', { callback_query_id: cq.id });
@@ -2263,7 +2752,7 @@ async function handleCallback(cq) {
       await removeInline(chatId, msg.message_id);
       await send(chatId,
         `📁 Working directory → ${target}\nA new session will start in this folder.`,
-        { reply_markup: MAIN_KEYBOARD });
+        { reply_markup: mainKeyboard() });
       return;
     }
 
@@ -2329,6 +2818,17 @@ async function handleCallback(cq) {
       return;
     }
 
+    if (data.startsWith('sesspage:')) {
+      const [, mode, rawPage] = data.split(':');
+      await api('answerCallbackQuery', { callback_query_id: cq.id });
+      return showSessionPicker(
+        chatId,
+        mode === 'resume' ? 'resume' : 'sessions',
+        Number(rawPage),
+        msg.message_id
+      );
+    }
+
     if (data === 'new') {
       s.newSession = true;
       s.resumeId = null;
@@ -2341,7 +2841,7 @@ async function handleCallback(cq) {
       await removeInline(chatId, msg.message_id);
       await send(chatId,
         '🆕 New conversation ready. The next message starts a fresh Zero session.',
-        { reply_markup: MAIN_KEYBOARD });
+        { reply_markup: mainKeyboard() });
       return;
     }
 
@@ -2372,7 +2872,7 @@ async function handleCallback(cq) {
       await send(chatId,
         `⏪ Session active: ${id.slice(0, 8)}\n📁 ${meta.cwd}\n` +
         'Warning: the terminal session may still be active. Avoid using it there while the bot runs.',
-        { reply_markup: MAIN_KEYBOARD });
+        { reply_markup: mainKeyboard() });
       return;
     }
 
@@ -2416,7 +2916,7 @@ async function handleCallback(cq) {
         `⏪ Session active: ${id.slice(0, 8)}${title ? `\n${title}` : ''}\n` +
         `📁 ${meta.cwd}\n` +
         'The next message continues this session. Use /new to start fresh.',
-        { reply_markup: MAIN_KEYBOARD });
+        { reply_markup: mainKeyboard() });
       return;
     }
 
@@ -2445,6 +2945,7 @@ async function handleMessage(message) {
   const s = sessionFor(chatId);
   let text = (message.text || '').trim();
   if (KEYBOARD_MAP[text]) text = KEYBOARD_MAP[text];
+  else if (/^📋 Queue( \(\d+\))?$/.test(text)) text = '/queue';
 
   // Commands are handled immediately so /status and /stop work while busy.
   if (text.startsWith('/')) {
@@ -2459,7 +2960,7 @@ async function handleMessage(message) {
 
   // Shell passthrough.
   if (text.startsWith('!') && text.length > 1) {
-    enqueue(chatId, text.slice(1), 'shell', 'shell');
+    enqueue(chatId, text.slice(1), 'shell', 'shell', { notify: true });
     return;
   }
 
@@ -2476,7 +2977,7 @@ async function handleMessage(message) {
   const prompt = buildPrompt(message, attachment);
   if (!prompt) return;
 
-  enqueue(chatId, prompt, text || (attachment ? 'attachment' : 'message'), 'zero');
+  enqueue(chatId, prompt, text || (attachment ? 'attachment' : 'message'), 'zero', { notify: true });
 }
 
 // ---------------------------------------------------------------------- Poll
@@ -2540,6 +3041,10 @@ function shutdown(signal) {
     if (activeJob.control) activeJob.control.stop = true;
     killTree(activeJob.child, 'SIGTERM');
   }
+  for (const child of btwJobs.values()) {
+    killTree(child, 'SIGTERM');
+  }
+  btwJobs.clear();
   saveState();
   setTimeout(() => process.exit(0), 500);
 }
@@ -2557,7 +3062,7 @@ process.on('unhandledRejection', e => log('unhandled rejection:', e));
     await syncCommands();
     await send([...allowedChatIds][0],
       `🤖 Zero bridge v${VERSION} online (@${me.username}). Send a message or /help.`,
-      { reply_markup: MAIN_KEYBOARD });
+      { reply_markup: mainKeyboard() });
   } catch (e) {
     log('startup check failed:', e.message);
   }

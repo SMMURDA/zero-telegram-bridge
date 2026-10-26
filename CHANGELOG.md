@@ -12,6 +12,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.11.0] - 2026-10-26
+
+### Added
+
+- `/queue`: shows the running job and the first ten waiting jobs, lets you
+  remove an individual job, and clears the queue. Messages accepted while the
+  bridge is busy now report their queue position, and the queue is capped at
+  50 jobs.
+- Live queue visibility: the reply keyboard now has **📋 Queue** and **💭 BTW**
+  buttons. The Queue label includes the active plus waiting count, the activity
+  message header updates that count live, and its inline Queue button opens the
+  panel. Reply-keyboard labels refresh with the next outgoing message because
+  Telegram cannot edit a reply keyboard in place.
+- `/btw <question>`: asks a side question against the current session in a
+  read-only run (`--no-session-persistence`). It does not create a session,
+  alter the chat's resume state or context counters, or wait for a running job.
+  BTW spend is added to the bridge total, and `/stop` cancels it.
+- File output: the agent can send files and screenshots to Telegram by ending
+  its final reply with a `[[send-file:/path]]` marker block, one file per line.
+  Markers are removed from the visible text; only a trailing block counts, so
+  quoted examples and mid-answer markers do not trigger uploads. Images up to
+  10 MB use `sendPhoto`, other files use `sendDocument`, `maxFileBytes` is
+  enforced, and the bridge refuses to send its own config, state, log, or
+  credentials.
+- Pagination for `/sessions` and `/resume`: ten sessions per page across the 60
+  most recent sessions, with Newer/Older buttons. Numeric `/resume N` uses the
+  same 60-session window, so picker numbers and command numbers agree.
+
+### Changed
+
+- The session picker reports its page number and keeps the global session
+  numbering visible on every page.
+
 ## [0.10.2] - 2026-10-26
 
 ### Fixed
@@ -351,7 +384,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.5.0...v0.10.1
 [0.5.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.4.9...v0.5.0

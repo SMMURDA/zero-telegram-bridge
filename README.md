@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.10.2-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.11.0-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://www.npmjs.com/package/@paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -20,6 +20,10 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - 🗜️ **Compaction** — manual `/compact [instructions]`, plus per-chat auto-compact with a confirmation UI and configurable threshold.
 - ⏹️ **ESC-like stop** — `/stop` sends `SIGINT` first, then escalates, so you can give the agent a new direction immediately.
 - ⚡ **One-tap resume** — `/sessions` shows inline buttons; one click activates that session for the next message.
+- 📄 **Paged sessions** — `/sessions` and `/resume` paginate ten sessions per page across the 60 most recent projects.
+- 📋 **Queue control** — `/queue` lists waiting jobs and lets you remove one or clear all; new messages report their queue position.
+- 💭 **`/btw`** — ask a side question against the current context in a read-only run; the chat's session, resume state, and context counters stay untouched.
+- 📤 **File output** — the agent ends its reply with a `[[send-file:/path]]` block to send files and screenshots back.
 - 🧠 **Per-chat settings** — model, effort, and working directory independent of any terminal session.
 - 🎛️ **Inline settings menus** — one-tap pickers for model, effort, folder, progress, and auto-compact; no commands required.
 - 📡 **Live progress** — choose how thinking, tool actions, and answer steps are shown. Tools always stream in one edited message; thinking and answers can be separate messages or join the stream.
@@ -154,12 +158,14 @@ Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in 
 | `/new` | Start a fresh conversation |
 | `/resume` | Session picker with inline buttons |
 | `/resume <number\|id>` | Resume a specific session |
-| `/sessions` | Recent sessions for the working directory |
+| `/sessions` | Paged picker of recent sessions across all projects |
 | `/compact [instructions]` | Summarize the conversation and free context |
 | `/compactmenu` | Combined Compact & Auto-compact menu (the keyboard button) |
 | `/autocompact` | Auto-compact status; enable/disable with inline confirmation |
 | `/progress` | Progress display: `full`, `messages`, `stream`, or `off` |
 | `/status` | Model, effort, folder, queue, cost, context, uptime |
+| `/queue` | List waiting jobs, remove one, or clear the queue |
+| `/btw <question>` | Side question in a read-only run against the current session |
 | `/settings` | Inline menu for model, effort, folder, progress, and auto-compact |
 | `/model [name]` | Inline model picker, or set a model directly |
 | `/effort [level]` | Inline effort picker, or set effort directly |
@@ -183,8 +189,15 @@ Unknown slash commands are forwarded to Zero, so skills such as `/commit` keep w
 🆕 New Session   🗂️ Sessions   ⏪ Resume
 🧠 Model         ⚙️ Effort     📁 Folder
 📊 Status        ⚙️ Settings   ⏹️ Stop
+📋 Queue (N)     💭 BTW
 🗜️ Compact & Auto              ❓ Help
 ```
+
+**Queue** opens the queue panel. Its label shows the number of active plus
+waiting jobs. Telegram reply keyboards cannot be edited in place, so the label
+refreshes on the next outgoing message; the activity message is updated live
+instead, including an inline **📋 Queue (N)** button. **BTW** opens the usage
+hint for `/btw`.
 
 **Compact & Auto** opens one menu for manual compaction and the auto-compact
 settings. **Cost** was removed from the keyboard because `/status` already shows
@@ -220,7 +233,9 @@ The bridge passes `DISABLE_AUTO_COMPACT=1` to every `zero` child, so Zero's buil
 
 ## Sessions
 
-Zero stores sessions as `~/.zero/projects/<slug>/<uuid>.jsonl`. The bridge scans **every** project directory, so sessions created in a terminal appear in the same picker as Telegram sessions. The 12 most recent are shown with their project path.
+Zero stores sessions as `~/.zero/projects/<slug>/<uuid>.jsonl`. The bridge scans **every** project directory, so sessions created in a terminal appear in the same picker as Telegram sessions. The picker shows ten sessions per page, newest first, across up to the 60 most recent sessions in every project. Use **Newer** / **Older** to page through them.
+
+Titles come from the first real user turn. The bridge's thinking-language hint is appended after the message and stripped when older session files are read, so sessions no longer share the same `[ATURAN WAJIB: …]` title.
 
 Tapping a session:
 
@@ -235,6 +250,22 @@ If the **same session** is open in an interactive Zero CLI, `/resume` warns firs
 Process verification uses `/proc` on Linux; on other platforms the registry entry is trusted.
 
 `/status` reports context for the bot's own session. After `/resume`, it reads the session's last usage entry and labels the value `last known from session` until the next bot turn updates it. `/new` and `/cwd` reset the context display for the fresh session.
+
+## Queue and side questions
+
+Messages that arrive while a job is running are queued and run in order. The bot replies with the queue position. `/queue` shows the running job and the first ten waiting jobs; each waiting job has a remove button, plus a button to clear the queue. The queue is capped at 50 jobs.
+
+`/btw <question>` asks a side question without starting a new turn in the chat. It resumes the current session with `--no-session-persistence`, so it can read the conversation context but cannot write to it or create a new session file. The answer arrives as a separate `💭 BTW` message. BTW spend is added to the bridge total, but the chat's session cost pointer, context counters, and resume state are unchanged. `/stop` also cancels a running BTW question.
+
+## File output
+
+The agent can send files back to Telegram. It ends its final reply with a contiguous marker block, one file per line:
+
+```
+[[send-file:/absolute/path/report.pdf]]
+```
+
+Relative paths resolve from the current working directory. Only a trailing block of marker lines is consumed; markers inside a sentence, a code span, or followed by more text are ignored, so quoted examples do not trigger uploads. Images up to 10 MB use `sendPhoto`; other files use `sendDocument`. The size limit is `maxFileBytes` (20 MB by default). The bridge refuses to send its own config, state, log, or `.git-credentials`.
 
 ## Progress modes
 
