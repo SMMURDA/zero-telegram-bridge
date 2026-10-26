@@ -46,6 +46,17 @@ function isImageFile(file) {
   return /\.(?:jpe?g|png|webp)$/i.test(String(file || ''));
 }
 
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+
+// Telegram's image processor can reject a technically valid image (for
+// example, a 1x1 PNG returns IMAGE_PROCESS_FAILED). Keep document upload as a
+// fallback so the file still reaches the user.
+function uploadMethodsFor(file, size) {
+  return isImageFile(file) && Number(size) <= MAX_PHOTO_BYTES
+    ? ['sendPhoto', 'sendDocument']
+    : ['sendDocument'];
+}
+
 function buildMultipart(fields, file) {
   const boundary = '----ZeroBridge' + Date.now().toString(16) + Math.random().toString(16).slice(2);
   const chunks = [];
@@ -67,4 +78,9 @@ function buildMultipart(fields, file) {
   return { boundary, body: Buffer.concat(chunks) };
 }
 
-module.exports = { extractFileMarkers, isImageFile, buildMultipart };
+module.exports = {
+  extractFileMarkers,
+  isImageFile,
+  uploadMethodsFor,
+  buildMultipart
+};

@@ -25,7 +25,7 @@ const path = require('path');
 const https = require('https');
 const { spawn, execFile } = require('child_process');
 const { toTelegramHtml, splitMarkdown, escapeHtml } = require('./markdown');
-const { extractFileMarkers, isImageFile, buildMultipart } = require('./files');
+const { extractFileMarkers, uploadMethodsFor, buildMultipart } = require('./files');
 const {
   discoverSessions,
   findActiveSession,
@@ -585,26 +585,41 @@ async function sendFileToTelegram(chatId, rawPath, s) {
   }
 
   const name = path.basename(target);
-  const image = isImageFile(name) && stat.size <= 10 * 1024 * 1024;
-  const method = image ? 'sendPhoto' : 'sendDocument';
-  const field = image ? 'photo' : 'document';
-
+  let data;
   try {
-    await telegramUpload(method, {
-      chat_id: chatId,
-      caption: clip(name, 200)
-    }, {
-      field,
-      filename: name,
-      mime: mimeFor(name),
-      data: fs.readFileSync(target)
-    });
-    return true;
+    data = fs.readFileSync(target);
   } catch (e) {
-    log('send file failed:', e.message);
-    await send(chatId, redact(`⚠️ Failed to send ${name}: ${e.message}`).slice(0, 500));
+    await send(chatId, redact(`⚠️ Failed to read ${name}: ${e.message}`).slice(0, 500));
     return false;
   }
+
+  const fields = { chat_id: chatId, caption: clip(name, 200) };
+  const methods = uploadMethodsFor(name, stat.size);
+  let lastError = null;
+
+  for (const method of methods) {
+    const field = method === 'sendPhoto' ? 'photo' : 'document';
+    try {
+      await telegramUpload(method, fields, {
+        field,
+        filename: name,
+        mime: mimeFor(name),
+        data
+      });
+      return true;
+    } catch (e) {
+      lastError = e;
+      if (methods.length > 1) {
+        log(`${method} failed, trying document fallback:`, e.message);
+      }
+    }
+  }
+
+  log('send file failed:', lastError ? lastError.message : 'unknown error');
+  await send(chatId,
+    redact(`⚠️ Failed to send ${name}: ${lastError ? lastError.message : 'unknown error'}`)
+      .slice(0, 500));
+  return false;
 }
 
 let commandsSynced = false;

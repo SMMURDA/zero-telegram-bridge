@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.11.1] - 2026-10-26
+
+### Fixed
+
+- File uploads no longer fail outright when Telegram's image processor rejects
+  a technically valid image. A `sendPhoto` failure such as
+  `IMAGE_PROCESS_FAILED` now retries the same file as `sendDocument`, so it
+  still reaches the user. Reproduced live with a 1x1 PNG; a 64x64 PNG uploads
+  as a photo normally.
+- Added unit coverage for upload-method selection: small images try
+  `sendPhoto` then fall back to `sendDocument`, oversize images and GIFs go
+  straight to `sendDocument`.
+
 ## [0.11.0] - 2026-10-26
 
 ### Added
@@ -384,7 +397,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.5.0...v0.10.1

@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.11.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.11.1-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://www.npmjs.com/package/@paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -265,7 +265,7 @@ The agent can send files back to Telegram. It ends its final reply with a contig
 [[send-file:/absolute/path/report.pdf]]
 ```
 
-Relative paths resolve from the current working directory. Only a trailing block of marker lines is consumed; markers inside a sentence, a code span, or followed by more text are ignored, so quoted examples do not trigger uploads. Images up to 10 MB use `sendPhoto`; other files use `sendDocument`. The size limit is `maxFileBytes` (20 MB by default). The bridge refuses to send its own config, state, log, or `.git-credentials`.
+Relative paths resolve from the current working directory. Only a trailing block of marker lines is consumed; markers inside a sentence, a code span, or followed by more text are ignored, so quoted examples do not trigger uploads. Images up to 10 MB try `sendPhoto` and automatically fall back to `sendDocument` if Telegram rejects the image (for example, `IMAGE_PROCESS_FAILED`); other files use `sendDocument`. The size limit is `maxFileBytes` (20 MB by default). The bridge refuses to send its own config, state, log, or `.git-credentials`.
 
 ## Progress modes
 

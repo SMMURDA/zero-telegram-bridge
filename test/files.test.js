@@ -1,7 +1,12 @@
 'use strict';
 
 const assert = require('assert');
-const { extractFileMarkers, isImageFile, buildMultipart } = require('../src/files');
+const {
+  extractFileMarkers,
+  isImageFile,
+  uploadMethodsFor,
+  buildMultipart
+} = require('../src/files');
 
 const single = extractFileMarkers('Here is the chart.\n\n[[send-file:/tmp/chart.png]]\n');
 assert.strictEqual(single.text, 'Here is the chart.', 'trailing marker is removed');
@@ -59,6 +64,32 @@ assert.strictEqual(isImageFile('/tmp/a.webp'), true, 'webp is an image');
 assert.strictEqual(isImageFile('/tmp/a.gif'), false, 'gif is sent as a document');
 assert.strictEqual(isImageFile('/tmp/a.txt'), false, 'text is not an image');
 assert.strictEqual(isImageFile(''), false, 'empty path is not an image');
+
+assert.deepStrictEqual(
+  uploadMethodsFor('/tmp/a.png', 1024),
+  ['sendPhoto', 'sendDocument'],
+  'small images try sendPhoto, then fall back to sendDocument'
+);
+assert.deepStrictEqual(
+  uploadMethodsFor('/tmp/a.png', 10 * 1024 * 1024),
+  ['sendPhoto', 'sendDocument'],
+  'a 10 MB image still uses sendPhoto'
+);
+assert.deepStrictEqual(
+  uploadMethodsFor('/tmp/a.png', 10 * 1024 * 1024 + 1),
+  ['sendDocument'],
+  'oversize images go straight to sendDocument'
+);
+assert.deepStrictEqual(
+  uploadMethodsFor('/tmp/a.gif', 1024),
+  ['sendDocument'],
+  'gif goes straight to sendDocument'
+);
+assert.deepStrictEqual(
+  uploadMethodsFor('/tmp/a.txt', 1024),
+  ['sendDocument'],
+  'non-images go straight to sendDocument'
+);
 
 const payload = Buffer.from('hello world');
 const multipart = buildMultipart(
