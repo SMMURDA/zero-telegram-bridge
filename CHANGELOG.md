@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.12.0] - 2026-10-27
+
+### Added
+
+- `/skills [query]`: lists skills discovered from the current project's
+  `.zero/skills/`, `~/.zero/skills/`, and installed plugin directories. Names
+  and descriptions come from `SKILL.md` frontmatter, with folder-name and
+  first-paragraph fallbacks; duplicate names prefer project over user over
+  plugin, and results can be filtered. Added the **🧩 Skills** reply-keyboard
+  button and `/skills` command registration. Built-in Zero skills bundled
+  inside the CLI still work by name but cannot be enumerated from `-p` mode.
+- Unit tests for frontmatter parsing (plain, quoted, folded), discovery
+  precedence, plugin scanning, description/name fallbacks, and filtering.
+
 ## [0.11.1] - 2026-10-26
 
 ### Fixed
@@ -397,7 +411,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.2...v0.11.0
 [0.10.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.1...v0.10.2

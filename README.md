@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.11.1-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://www.npmjs.com/package/@paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -23,6 +23,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - 📄 **Paged sessions** — `/sessions` and `/resume` paginate ten sessions per page across the 60 most recent projects.
 - 📋 **Queue control** — `/queue` lists waiting jobs and lets you remove one or clear all; new messages report their queue position.
 - 💭 **`/btw`** — ask a side question against the current context in a read-only run; the chat's session, resume state, and context counters stay untouched.
+- 🧩 **Skill discovery** — `/skills [query]` lists project, user, and plugin skills with descriptions; the reply keyboard has a **🧩 Skills** button.
 - 📤 **File output** — the agent ends its reply with a `[[send-file:/path]]` block to send files and screenshots back.
 - 🧠 **Per-chat settings** — model, effort, and working directory independent of any terminal session.
 - 🎛️ **Inline settings menus** — one-tap pickers for model, effort, folder, progress, and auto-compact; no commands required.
@@ -166,6 +167,7 @@ Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in 
 | `/status` | Model, effort, folder, queue, cost, context, uptime |
 | `/queue` | List waiting jobs, remove one, or clear the queue |
 | `/btw <question>` | Side question in a read-only run against the current session |
+| `/skills [query]` | List project, user, and plugin skills; optional filter |
 | `/settings` | Inline menu for model, effort, folder, progress, and auto-compact |
 | `/model [name]` | Inline model picker, or set a model directly |
 | `/effort [level]` | Inline effort picker, or set effort directly |
@@ -189,7 +191,7 @@ Unknown slash commands are forwarded to Zero, so skills such as `/commit` keep w
 🆕 New Session   🗂️ Sessions   ⏪ Resume
 🧠 Model         ⚙️ Effort     📁 Folder
 📊 Status        ⚙️ Settings   ⏹️ Stop
-📋 Queue (N)     💭 BTW
+📋 Queue (N)     💭 BTW         🧩 Skills
 🗜️ Compact & Auto              ❓ Help
 ```
 
@@ -197,7 +199,7 @@ Unknown slash commands are forwarded to Zero, so skills such as `/commit` keep w
 waiting jobs. Telegram reply keyboards cannot be edited in place, so the label
 refreshes on the next outgoing message; the activity message is updated live
 instead, including an inline **📋 Queue (N)** button. **BTW** opens the usage
-hint for `/btw`.
+hint for `/btw`; **Skills** opens `/skills`.
 
 **Compact & Auto** opens one menu for manual compaction and the auto-compact
 settings. **Cost** was removed from the keyboard because `/status` already shows
@@ -250,6 +252,18 @@ If the **same session** is open in an interactive Zero CLI, `/resume` warns firs
 Process verification uses `/proc` on Linux; on other platforms the registry entry is trusted.
 
 `/status` reports context for the bot's own session. After `/resume`, it reads the session's last usage entry and labels the value `last known from session` until the next bot turn updates it. `/new` and `/cwd` reset the context display for the fresh session.
+
+## Skills
+
+`/skills [query]` discovers skills from:
+
+- `<cwd>/.zero/skills/<name>/SKILL.md` — project
+- `~/.zero/skills/<name>/SKILL.md` — user
+- installed plugin directories under `~/.zero/plugins` — plugin
+
+The name and description come from YAML frontmatter; the folder name is the fallback when no name is set, and the first paragraph is the description fallback. Duplicate names prefer project over user over plugin. Descriptions are cleaned, whitespace-collapsed, and truncated, and results can be filtered with a query. Run a skill with `/<name> [args]`.
+
+Built-in Zero skills bundled inside the CLI are not enumerable from `-p` mode, so they are not listed by `/skills`; they still work by name.
 
 ## Queue and side questions
 

@@ -26,6 +26,7 @@ const https = require('https');
 const { spawn, execFile } = require('child_process');
 const { toTelegramHtml, splitMarkdown, escapeHtml } = require('./markdown');
 const { extractFileMarkers, uploadMethodsFor, buildMultipart } = require('./files');
+const { discoverSkills, filterSkills } = require('./skills');
 const {
   discoverSessions,
   findActiveSession,
@@ -195,6 +196,7 @@ const KB = {
   settings: '⚙️ Settings',
   queue: '📋 Queue',
   btw: '💭 BTW',
+  skills: '🧩 Skills',
   help: '❓ Help'
 };
 
@@ -209,7 +211,7 @@ function mainKeyboard(includeActive = true) {
       [{ text: KB.newSession }, { text: KB.sessions }, { text: KB.resume }],
       [{ text: KB.model }, { text: KB.effort }, { text: KB.cwd }],
       [{ text: KB.status }, { text: KB.settings }, { text: KB.stop }],
-      [{ text: queueLabel }, { text: KB.btw }],
+      [{ text: queueLabel }, { text: KB.btw }, { text: KB.skills }],
       [{ text: KB.compact }, { text: KB.help }]
     ],
     resize_keyboard: true,
@@ -231,6 +233,7 @@ const KEYBOARD_MAP = {
   [KB.settings]: '/settings',
   [KB.queue]: '/queue',
   [KB.btw]: '/btw',
+  [KB.skills]: '/skills',
   [KB.help]: '/help',
   // Legacy reply keyboards cached by Telegram clients.
   '💰 Cost': '/cost',
@@ -252,6 +255,7 @@ const BOT_COMMANDS = [
   { command: 'status', description: '📊 Bridge status & queue' },
   { command: 'queue', description: '📋 View or clear the job queue' },
   { command: 'btw', description: '💭 Quick side question in a read-only run' },
+  { command: 'skills', description: '🧩 List available skills' },
   { command: 'model', description: '🧠 View or set model' },
   { command: 'effort', description: '⚙️ View or set effort' },
   { command: 'cwd', description: '📁 Working directory' },
@@ -304,6 +308,7 @@ const HELP = `📖 ZERO HELP
 /status — model, effort, folder, queue, cost, context
 /queue — view, remove, or clear queued jobs
 /btw <question> — quick side question in a read-only run (does not alter this chat)
+/skills [query] — list user, project, and plugin skills
 /stop — interrupt the running task (SIGINT) and clear the queue
 
 🧠 Settings
@@ -2264,6 +2269,49 @@ async function handleCommand(chatId, text, s) {
 
     case '/btw':
       return runBtw(chatId, s, rest);
+
+    case '/skills': {
+      const all = discoverSkills(HOME, s.cwd);
+      const list = filterSkills(all, rest);
+      const userSkills = path.join(HOME, '.zero', 'skills');
+      const projectSkills = path.join(s.cwd, '.zero', 'skills');
+
+      if (!list.length) {
+        const prefix = rest
+          ? `🔎 No skills match "${clip(rest, 60)}".\n\n`
+          : '🧩 No skills found.\n\n';
+        return send(chatId,
+          prefix +
+          'Add a skill at:\n' +
+          `• ${path.join(projectSkills, '<name>', 'SKILL.md')}\n` +
+          `• ${path.join(userSkills, '<name>', 'SKILL.md')}\n\n` +
+          'Built-in Zero skills still work by name.',
+          { reply_markup: mainKeyboard() });
+      }
+
+      const counts = list.reduce((acc, skill) => {
+        acc[skill.source] = (acc[skill.source] || 0) + 1;
+        return acc;
+      }, {});
+      const summary = ['project', 'user', 'plugin']
+        .filter(source => counts[source])
+        .map(source => `${source} ${counts[source]}`)
+        .join(' · ');
+      const shown = list.slice(0, 50).map(skill => {
+        const description = skill.description ? ` — ${skill.description}` : '';
+        return `• /${skill.name}${description} [${skill.source}]`;
+      });
+      if (list.length > shown.length) {
+        shown.push(`… and ${list.length - shown.length} more`);
+      }
+
+      return send(chatId,
+        `🧩 Skills (${list.length})${summary ? ` · ${summary}` : ''}` +
+        `${rest ? `\nfilter: "${clip(rest, 60)}"` : ''}\n\n` +
+        `${shown.join('\n')}\n\n` +
+        'Send /<name> [args] to run a skill. Built-in Zero skills still work by name.',
+        { reply_markup: mainKeyboard() });
+    }
 
     case '/status': {
       const running = activeJob
