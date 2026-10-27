@@ -12,6 +12,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.13.0] - 2026-10-27
+
+### Added
+
+- Installable Zero plugin and marketplace: `.zero-plugin/plugin.json`,
+  `.zero-plugin/marketplace.json`, the `telegram-bridge` skill, and the
+  `/telegram-setup` command. Users add the marketplace, install the plugin, and
+  run `/telegram-setup` with only their bot token and chat ID.
+- `scripts/setup.sh` and `scripts/setup-telegram.js`: validate the token,
+  detect the latest chat when no ID is given, send a confirmation message,
+  merge/write `config.json` with mode 600 under `~/.zero/telegram-bridge`, and
+  start the bridge. The token is never printed.
+- A plugin `SessionStart` hook auto-starts the bridge when that config exists.
+  Runtime data lives outside the plugin directory, so plugin updates do not
+  erase it.
+- Scripts honor `ZERO_BRIDGE_RUNTIME` and `ZERO_BRIDGE_HOME`, chmod the runtime
+  directory to 700, resolve the `zero` binary to an absolute path during setup,
+  warn about a 409 token conflict, and fall back to Bun when Node 20+ is not
+  available.
+- Plugin manifest, skill, command, and file-layout tests, plus CI shell checks
+  for the new scripts.
+
+### Changed
+
+- `start.sh`, `stop.sh`, `supervise.sh`, and `hooks/session-start.sh` use
+  `ZERO_BRIDGE_RUNTIME` when set. Standalone installs keep using `runtime/`.
+
 ## [0.12.0] - 2026-10-27
 
 ### Added
@@ -411,7 +438,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.10.2...v0.11.0

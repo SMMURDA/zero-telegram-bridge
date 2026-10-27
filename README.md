@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://www.npmjs.com/package/@paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -9,10 +9,34 @@ Chat with your [Zero CLI](https://www.npmjs.com/package/@paean-ai/zero-cli) agen
 Telegram message ──▶ long poll ──▶ zero -p ──▶ JSON result ──▶ Telegram reply
 ```
 
-No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
+No npm dependencies. Just Node.js 20+ (or Bun) and an authenticated `zero` binary.
+
+## Install as a Zero plugin (recommended)
+
+Zero CLI users can install the bridge as a plugin and skip the manual clone:
+
+```bash
+zero plugin marketplace add SMMURDA/zero-telegram-bridge
+zero plugin install zero-telegram-bridge@smmurda-tools
+```
+
+Then run this in Zero CLI:
+
+```text
+/telegram-setup
+```
+
+Enter your [@BotFather](https://t.me/BotFather) token and chat ID. The setup
+validates the token, detects the chat automatically when possible, writes
+`~/.zero/telegram-bridge/config.json` with mode `600`, starts the bridge, and a
+plugin `SessionStart` hook keeps it running on future launches. Plugin updates
+do not erase runtime data. Node.js 20+ or Bun is detected automatically.
+
+The manual install below remains available.
 
 ## Features
 
+- 📦 **Installable plugin** — marketplace install plus `/telegram-setup`; enter a token and chat ID and the hook keeps the bridge running.
 - 💬 **Two-way chat** — send a message, get the agent's reply, keep the context.
 - 🆕 **Session continuity** — `-c` between messages, `/new` to reset, `/resume` to pick an older session.
 - 🖥️ **All projects** — terminal sessions and Telegram sessions appear in the same picker; resuming switches to the session's project directory.
@@ -31,7 +55,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 - ✨ **Markdown rendering** — bold, italic, code blocks, links, headings, and quotes render properly in Telegram instead of showing literal markers.
 - 📎 **Attachments** — photos, documents, voice notes, and videos are downloaded and handed to the agent.
 - ↩️ **Reply context** — quoting a Telegram message includes the quoted text in the prompt.
-- ⌨️ **Reply keyboard** — Session, Resume, Model, Effort, Folder, Status, Stop, Compact & Auto, Settings, Help.
+- ⌨️ **Reply keyboard** — Session, Resume, Model, Effort, Folder, Status, Stop, Queue, BTW, Skills, Compact & Auto, Settings, Help.
 - 🐚 **Shell passthrough** — `!ls -la` runs in the working directory.
 - 💰 **Cost tracking** — `/cost` reads `total_cost_usd` from Zero's JSON output.
 - 🔒 **Owner allowlist** — every update is checked against `allowedChatIds`.
@@ -40,7 +64,7 @@ No npm dependencies. Just Node.js 20+ and an authenticated `zero` binary.
 
 ## Requirements
 
-- Node.js **20 or newer**
+- Node.js **20 or newer**, or **Bun**
 - Zero CLI installed and authenticated (`zero -p "hello"` works)
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
@@ -100,9 +124,11 @@ node src/bridge.js
 
 Open the chat, send `/start`, then just talk to the agent.
 
-### 4. Auto-start with Zero CLI (recommended)
+### 4. Auto-start with the manual install
 
-If the bridge dies whenever you close your terminal, add a user-level `SessionStart` hook. Zero runs it on every new session, resume, clear, and compact:
+Plugin installs get auto-start from the plugin's own `SessionStart` hook. For a
+manual clone, add this user-level hook. Zero runs it on every new session,
+resume, clear, and compact:
 
 `~/.zero/settings.json`:
 
@@ -147,7 +173,9 @@ If your host tears down every process when the CLI exits, the bridge will stop w
 
 Environment variables take precedence. If `TELEGRAM_ALLOWED_CHAT_IDS` is set, it replaces the file list.
 
-Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in `runtime/` and are gitignored.
+Runtime files (`config.json`, `state.json`, `bridge.log`, `bridge.pid`) live in
+`runtime/` for standalone installs, or in `~/.zero/telegram-bridge` for the
+plugin. They are never committed.
 
 ## Commands
 

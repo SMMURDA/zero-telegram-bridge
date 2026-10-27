@@ -11,14 +11,14 @@ if [ "${ZERO_BRIDGE_CHILD:-}" = "1" ]; then
 fi
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-RUNTIME="$ROOT/runtime"
+RUNTIME="${ZERO_BRIDGE_RUNTIME:-$ROOT/runtime}"
 PATH="${PATH:-/usr/local/bin:/usr/bin:/bin}"
 
 mkdir -p "$RUNTIME" 2>/dev/null || true
 
 {
   echo "$(date -Is) [hook] SessionStart"
-  "$ROOT/scripts/start.sh"
+  ZERO_BRIDGE_RUNTIME="$RUNTIME" "$ROOT/scripts/start.sh"
 } >> "$RUNTIME/bridge.log" 2>&1 || true
 
 # SessionStart hooks cannot block the session, but exit cleanly anyway.

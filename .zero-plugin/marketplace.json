@@ -1,0 +1,18 @@
+{
+  "name": "smmurda-tools",
+  "owner": {
+    "name": "SMMURDA"
+  },
+  "metadata": {
+    "version": "0.13.0",
+    "description": "Zero CLI tools by SMMURDA, including the Telegram bridge."
+  },
+  "plugins": [
+    {
+      "name": "zero-telegram-bridge",
+      "source": "./",
+      "description": "Two-way Telegram bridge for Zero CLI with setup, auto-start, sessions, file output, and queue control.",
+      "version": "0.13.0"
+    }
+  ]
+}

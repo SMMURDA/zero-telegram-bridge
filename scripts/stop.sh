@@ -2,7 +2,7 @@
 set -u
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-RUNTIME="$ROOT/runtime"
+RUNTIME="${ZERO_BRIDGE_RUNTIME:-$ROOT/runtime}"
 
 if [ ! -f "$RUNTIME/bridge.pid" ]; then
   echo "not running (no bridge.pid)"

@@ -1,6 +1,6 @@
 {
   "name": "zero-telegram-bridge",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Two-way Telegram chat bridge for Zero CLI — chat with your terminal agent from Telegram.",
   "main": "src/bridge.js",
   "bin": {
@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/bridge.js",
     "check": "node --check src/bridge.js",
-    "test": "node test/markdown.test.js && node test/sessions.test.js && node test/files.test.js && node test/skills.test.js"
+    "test": "node test/markdown.test.js && node test/sessions.test.js && node test/files.test.js && node test/skills.test.js && node test/plugin.test.js"
   },
   "engines": {
     "node": ">=20"

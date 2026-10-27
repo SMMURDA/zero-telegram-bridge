@@ -13,12 +13,18 @@ jobs:
         with:
           node-version: 20
       - name: Syntax check
-        run: node --check src/bridge.js
+        run: |
+          node --check src/bridge.js
+          node --check src/files.js
+          node --check src/skills.js
+          node --check scripts/setup-telegram.js
       - name: Shell check
         run: |
           sh -n scripts/start.sh
           sh -n scripts/stop.sh
           sh -n scripts/supervise.sh
+          sh -n scripts/setup.sh
           sh -n hooks/session-start.sh
+          sh -n hooks/plugin-session-start.sh
       - name: Unit tests
         run: npm test
