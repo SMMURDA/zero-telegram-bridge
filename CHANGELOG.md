@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.13.2] - 2026-10-27
+
+### Fixed
+
+- Plugin `SessionStart` auto-start now uses `${CLAUDE_PLUGIN_ROOT}`, the variable
+  Zero substitutes in hook commands. `${ZERO_CLI_PLUGIN_ROOT}` is not
+  substituted there, so the hook silently failed after restarting Zero CLI and
+  the bot stayed offline.
+- The hook invokes `bash` explicitly so Zero's automatic `.sh` prefix does not
+  produce `bash bash …`.
+- Added tests that reject `${ZERO_CLI_PLUGIN_ROOT}` in hook commands and require
+  the `bash` prefix.
+
 ## [0.13.1] - 2026-10-27
 
 ### Fixed
@@ -449,7 +462,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.2...HEAD
+[0.13.2]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.1...v0.13.2
 [0.13.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.1...v0.12.0

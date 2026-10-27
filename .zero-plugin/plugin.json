@@ -1,6 +1,6 @@
 {
   "name": "zero-telegram-bridge",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "Two-way Telegram bridge for Zero CLI: chat with your agent, keep sessions, stream progress, send files, and control the queue from Telegram.",
   "author": {
     "name": "SMMURDA"

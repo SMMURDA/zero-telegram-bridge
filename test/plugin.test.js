@@ -31,9 +31,19 @@ assert.strictEqual(entry.version, pkg.version);
 const sessionStart = hooks.hooks && hooks.hooks.SessionStart;
 assert(Array.isArray(sessionStart) && sessionStart.length > 0, 'SessionStart hook exists');
 const commands = sessionStart.flatMap(entry => entry.hooks.map(hook => hook.command));
+const autoStart = commands.find(command => command.includes('plugin-session-start.sh'));
+assert(autoStart, 'SessionStart runs the plugin auto-start script');
 assert(
-  commands.some(command => command.includes('plugin-session-start.sh')),
-  'SessionStart runs the plugin auto-start script'
+  autoStart.includes('${CLAUDE_PLUGIN_ROOT}'),
+  'hook uses the variable Zero actually substitutes'
+);
+assert(
+  !autoStart.includes('${ZERO_CLI_PLUGIN_ROOT}'),
+  'hooks do not substitute ZERO_CLI_PLUGIN_ROOT'
+);
+assert(
+  autoStart.trim().startsWith('bash '),
+  'hook starts with bash so Zero does not prefix a second bash'
 );
 
 const required = [
