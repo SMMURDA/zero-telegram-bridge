@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [0.13.1] - 2026-10-27
+
+### Fixed
+
+- Rerunning `/telegram-setup` now stops the existing daemon before writing and
+  starting with the new config, so a changed token, chat ID, or workflow is
+  actually applied.
+- Added `/telegram-restart` and `scripts/restart.sh` to reload the daemon after
+  `zero plugin update` without re-entering the token. The plugin skill and
+  README document the update flow.
+
 ## [0.13.0] - 2026-10-27
 
 ### Added
@@ -438,7 +449,8 @@ Nothing yet.
 - Shell passthrough with `!command`, cost tracking, and an owner allowlist.
 - Supervisor scripts, example config, MIT license, and CI syntax checks.
 
-[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.1...v0.12.0
 [0.11.1]: https://github.com/SMMURDA/zero-telegram-bridge/compare/v0.11.0...v0.11.1

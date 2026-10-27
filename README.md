@@ -1,6 +1,6 @@
 # Zero Telegram Bridge
 
-[![Version](https://img.shields.io/badge/version-0.13.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.13.1-blue)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Chat with your [Zero CLI](https://www.npmjs.com/package/@paean-ai/zero-cli) agent from Telegram. Two-way, session-aware, attachment-friendly, and built for a single owner.
@@ -30,7 +30,9 @@ Enter your [@BotFather](https://t.me/BotFather) token and chat ID. The setup
 validates the token, detects the chat automatically when possible, writes
 `~/.zero/telegram-bridge/config.json` with mode `600`, starts the bridge, and a
 plugin `SessionStart` hook keeps it running on future launches. Plugin updates
-do not erase runtime data. Node.js 20+ or Bun is detected automatically.
+do not erase runtime data; run `/telegram-restart` (or rerun `/telegram-setup`)
+after an update so the daemon loads the new code. Node.js 20+ or Bun is detected
+automatically.
 
 The manual install below remains available.
 

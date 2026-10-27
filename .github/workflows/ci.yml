@@ -24,6 +24,7 @@ jobs:
           sh -n scripts/stop.sh
           sh -n scripts/supervise.sh
           sh -n scripts/setup.sh
+          sh -n scripts/restart.sh
           sh -n hooks/session-start.sh
           sh -n hooks/plugin-session-start.sh
       - name: Unit tests

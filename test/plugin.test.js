@@ -47,7 +47,9 @@ const required = [
   'scripts/setup-telegram.js',
   'scripts/start.sh',
   'scripts/stop.sh',
-  'scripts/supervise.sh'
+  'scripts/supervise.sh',
+  'scripts/restart.sh',
+  'commands/telegram-restart.md'
 ];
 for (const file of required) {
   assert(fs.existsSync(path.join(root, file)), `${file} exists`);
@@ -60,5 +62,8 @@ assert(skill.includes('~/.zero/telegram-bridge'), 'skill documents the stable da
 
 const command = fs.readFileSync(path.join(root, 'commands/telegram-setup.md'), 'utf8');
 assert(/^---\ndescription:/.test(command), 'telegram-setup command has a description');
+
+const restartCommand = fs.readFileSync(path.join(root, 'commands/telegram-restart.md'), 'utf8');
+assert(restartCommand.includes('scripts/restart.sh'), 'restart command points at restart.sh');
 
 console.log('plugin tests passed');

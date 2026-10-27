@@ -58,6 +58,8 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+ZERO_BRIDGE_RUNTIME="$DATA" "$ROOT/scripts/stop.sh" >/dev/null 2>&1 || true
+
 if ! ZERO_BRIDGE_RUNTIME="$DATA" "$ROOT/scripts/start.sh"; then
   echo "Config saved, but the bridge failed to start. See $DATA/bridge.log" >&2
   exit 1

@@ -50,3 +50,5 @@ background process and keeps itself alive through a `SessionStart` plugin hook.
   the old process before starting this one.
 - **Node/Bun missing** — install Node.js 20+ or Bun.
 - **Bridge fails to start** — inspect `~/.zero/telegram-bridge/bridge.log`.
+- **After a plugin update** — run `/telegram-restart` (or rerun
+  `/telegram-setup`) so the daemon loads the new code. Runtime data is kept.
